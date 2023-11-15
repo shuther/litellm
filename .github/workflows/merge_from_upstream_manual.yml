@@ -12,30 +12,33 @@ on:
         required: true
         default: 'main'           # set the upstream branch to merge from
       branch:
+        #under ${{ github.repository }}"
         description: 'Branch to merge to'
         required: true
         default: 'main'         # set the branch to merge to
       useremail: 
         description: 'User email - required for git commits'
-        required: true
+        required: false
       username:
         description: 'User name - required for git commits'
-        required: true
+        required: false
 
 jobs:
   merge-from-upstream-repo:
     runs-on: ubuntu-latest
     steps: 
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0 
       - name: Merge from upstream repo
         uses: discdiver/merge-from-upstream-repo@v0.0.9
         with:
-          useremail: "${{ github.event.inputs.useremail}}"
-          username: "${{ github.event.inputs.username}"
+          useremail: "${{ github.pusher.email }}"
+          #"${{ github.event.inputs.useremail}}"
+          username: "${{ github.actor }}"
+          #"${{ github.event.inputs.username}"
           upstream: ${{ github.event.inputs.upstream }}
           upstream-branch: ${{ github.event.inputs.upstream-branch }}
           branch: ${{ github.event.inputs.branch }}
