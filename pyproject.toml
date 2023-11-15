@@ -7,7 +7,7 @@ license = "MIT License"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.10"
 openai = ">=1.0.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
@@ -36,6 +36,8 @@ sentry-sdk = {extras = ["utils"], version = "^1.35.0"}
 numpydoc = {extras = ["utils"], version = "^1.6.0"}
 anthropic = {extras = ["utils"], version = "^0.6.0"}
 huggingface-hub = {extras = ["utils"], version = "^0.19.2"}
+autoevals = {extras = ["utils"], version = "^0.0.31"}
+torch = {extras = ["utils"], version = "^2.1.0"}
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
@@ -45,6 +47,10 @@ black = ">=23.11.0"
 pydantic-core = "^2.14.1"
 pre-commit = "^3.5.0"
 pytest = "^7.4.3"
+termcolor = "^2.3.0"
+gptcache = "^0.1.42"
+flask = "^3.0.0"
+flask-cors = "^4.0.0"
 
 [build-system]
 requires = ["poetry-core"]
