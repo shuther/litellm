@@ -133,13 +133,19 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             base_url=api_base
         )
 
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-            {
-                "role": "user",
-                "content": "this is a test request, write a short poem"
-            }
-        ])
-        click.echo(f'\nLiteLLM: response from proxy {response}')
+        # Debug statements
+        print(f"API Base: {api_base}")
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "this is a test request, write a short poem",
+                }
+            ],
+        )
+        click.echo(f"\nLiteLLM: response from proxy {response}")
 
         print("\n Making streaming request to proxy")
 
