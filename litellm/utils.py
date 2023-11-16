@@ -4350,7 +4350,8 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = ""
-            print_verbose(f"chunk: {chunk}")
+            print_verbose(f"chunk: {chunk}")  # chunk is of type bytes
+            chunk = chunk.decode("utf-8")
             if chunk.startswith("data:"):
                 data_json = json.loads(chunk[5:])
                 print_verbose(f"data json: {data_json}")
