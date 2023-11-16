@@ -49,6 +49,7 @@ def clone_subfolder(repo_url, subfolder, destination):
         shutil.copytree(source, dest_path)
 
   # Remove cloned repo folder
+  #TODO seems dangerous?
   subprocess.run(['rm', '-rf', os.path.join(destination, "repo_master")])
   feature_telemetry(feature="create-proxy")
 
