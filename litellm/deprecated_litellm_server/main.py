@@ -13,11 +13,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path - for litellm local dev
 import litellm
-print(f"litellm: {litellm}")
+
 try:
-    from utils import set_callbacks, load_router_config, print_verbose
+    from litellm.deprecated_litellm_server.server_utils import set_callbacks, load_router_config, print_verbose
 except ImportError:
-    from litellm_server.utils import set_callbacks, load_router_config, print_verbose
+    from litellm.deprecated_litellm_server.server_utils import set_callbacks, load_router_config, print_verbose
 import dotenv
 dotenv.load_dotenv() # load env variables
 
@@ -40,7 +40,6 @@ server_settings: Optional[dict] = None
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
 
 if "CONFIG_FILE_PATH" in os.environ:
-    print(f"CONFIG FILE DETECTED")
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router, config_file_path=os.getenv("CONFIG_FILE_PATH"))
 else:
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router)
@@ -71,9 +70,9 @@ def model_list():
     )
 # for streaming
 def data_generator(response):
-    print("inside generator")
+
     for chunk in response:
-        print(f"returned chunk: {chunk}")
+
         yield f"data: {json.dumps(chunk)}\n\n"
 
 @router.post("/v1/completions")
@@ -95,7 +94,7 @@ async def embedding(request: Request):
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
-            api_key = api_key.replace("Bearer", "").strip()
+            api_key = api_key.replace("Bearer", "").strip() # type: ignore
             if len(api_key.strip()) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
@@ -115,7 +114,6 @@ async def chat_completion(request: Request, model: Optional[str] = None):
     global llm_model_list, server_settings
     try:
         data = await request.json()
-        print(f"data: {data}")
         server_model = server_settings.get("completion_model", None) if server_settings else None
         data["model"] = server_model or model or data["model"]
         ## CHECK KEYS ## 
@@ -146,11 +144,10 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         )
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
                 return StreamingResponse(data_generator(response), media_type='text/event-stream')
-        print(f"response: {response}")
         return response
     except Exception as e:
         error_traceback = traceback.format_exc()
-        print(f"{error_traceback}")
+
         error_msg = f"{str(e)}\n\n{error_traceback}"
         # return {"error": error_msg}
         raise HTTPException(status_code=500, detail=error_msg)
@@ -187,7 +184,7 @@ async def router_embedding(request: Request):
         if llm_router is None: 
             raise Exception("Save model list via config.yaml. Eg.: ` docker build -t myapp --build-arg CONFIG_FILE=myconfig.yaml .` or pass it in as model_list=[..] as part of the request body")
 
-        response = await llm_router.aembedding(model="gpt-3.5-turbo", 
+        response = await llm_router.aembedding(model="gpt-3.5-turbo",  # type: ignore
                         messages=[{"role": "user", "content": "Hey, how's it going?"}])
 
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses

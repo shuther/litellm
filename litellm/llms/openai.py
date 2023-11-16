@@ -1,10 +1,11 @@
 from typing import Optional, Union
-import types, time
+import types, time, json
 import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object, Usage
 from typing import Callable, Optional
-import aiohttp
+import aiohttp, requests
+import litellm, openai
 
 class OpenAIError(Exception):
     def __init__(self, status_code, message, request: Optional[httpx.Request]=None, response: Optional[httpx.Response]=None):
@@ -223,16 +224,23 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                     else:
-                        response = self._client_session.post(
-                            url=api_base,
-                            json=data,
-                            headers=headers,
-                        )
-                        if response.status_code != 200:
-                            raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                        if model in litellm.models_by_provider["openai"]:
+                            if api_key:
+                                openai.api_key = api_key
+                            response = openai.chat.completions.create(**data)
+                            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
+                        else: 
+                            response = requests.post(
+                                url=api_base,
+                                json=data,
+                                headers=headers,
+                                timeout=600 # Set a 10-minute timeout for both connection and read
+                            )
+                            if response.status_code != 200:
+                                raise OpenAIError(status_code=response.status_code, message=response.text)
                             
-                        ## RESPONSE OBJECT
-                        return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                            ## RESPONSE OBJECT
+                            return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
@@ -263,17 +271,15 @@ class OpenAIChatCompletion(BaseLLM):
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
         kwargs = locals()
-        if self._aclient_session is None:
-            self._aclient_session = self.create_aclient_session()
-        client = self._aclient_session
         try: 
-            response = await client.post(api_base, json=data, headers=headers) 
-            response_json = response.json()
-            if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-            
-            ## RESPONSE OBJECT
-            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
+                response_json = response.json()
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                
+                ## RESPONSE OBJECT
+                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
         except Exception as e: 
             if isinstance(e, httpx.TimeoutException):
                 raise OpenAIError(status_code=500, message="Request Timeout Error")
@@ -290,13 +296,12 @@ class OpenAIChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        if self._client_session is None:
-            self._client_session = self.create_client_session()
-        with self._client_session.stream(
+        with httpx.stream(
                     url=f"{api_base}", # type: ignore
                     json=data,
                     headers=headers,
-                    method="POST" 
+                    method="POST",
+                    timeout=litellm.request_timeout 
                 ) as response: 
                     if response.status_code != 200:
                         raise OpenAIError(status_code=response.status_code, message=response.text()) # type: ignore
@@ -313,13 +318,13 @@ class OpenAIChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        if self._aclient_session is None:
-            self._aclient_session = self.create_aclient_session()
-        async with self._aclient_session.stream(
+        client = httpx.AsyncClient()
+        async with client.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    method="POST"
+                    method="POST",
+                    timeout=litellm.request_timeout
                 ) as response: 
             if response.status_code != 200:
                 raise OpenAIError(status_code=response.status_code, message=response.text()) # type: ignore
@@ -357,8 +362,8 @@ class OpenAIChatCompletion(BaseLLM):
                     additional_args={"complete_input_dict": data},
                 )
             ## COMPLETION CALL
-            response = self._client_session.post(
-                api_base, headers=headers, json=data
+            response = requests.post(
+                api_base, headers=headers, json=data, timeout=litellm.request_timeout
             )
             ## LOGGING
             logging_obj.post_call(
@@ -485,7 +490,7 @@ class OpenAITextCompletion(BaseLLM):
             elif optional_params.get("stream", False):
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
             else:
-                response = self._client_session.post(
+                response = httpx.post(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
@@ -519,7 +524,7 @@ class OpenAITextCompletion(BaseLLM):
                         api_key: str, 
                         model: str): 
         async with httpx.AsyncClient() as client:
-            response = await client.post(api_base, json=data, headers=headers) 
+            response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
             response_json = response.json()
             if response.status_code != 200:
                 raise OpenAIError(status_code=response.status_code, message=response.text)
@@ -546,11 +551,12 @@ class OpenAITextCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        with self._client_session.stream(
+        with httpx.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    method="POST"
+                    method="POST",
+                    timeout=litellm.request_timeout
                 ) as response: 
                     if response.status_code != 200:
                         raise OpenAIError(status_code=response.status_code, message=response.text) 
@@ -571,7 +577,8 @@ class OpenAITextCompletion(BaseLLM):
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    method="POST"
+                    method="POST",
+                    timeout=litellm.request_timeout
                 ) as response: 
             if response.status_code != 200:
                 raise OpenAIError(status_code=response.status_code, message=response.text)

@@ -25,13 +25,10 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
-            pip install infisical
             pip install pytest
             pip install pytest-asyncio
             pip install mypy
             pip install -q google-generativeai
-            pip install openai[datalib]
-            pip install -Uq chromadb==0.3.29
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
@@ -60,7 +57,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 50m
 
       # Store test results

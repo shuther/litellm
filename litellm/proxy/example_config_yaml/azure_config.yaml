@@ -1,9 +1,4 @@
 model_list:
-  - model_name: zephyr-alpha
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
-      max_tokens: 20
-      temperature: 0
   - model_name: gpt-4-team1
     litellm_params:
       model: azure/chatgpt-v-2
@@ -19,11 +14,4 @@ model_list:
     litellm_params:
       model: azure/gpt-4
       api_key: sk-123
-  - model_name: ollama/zephyr
-    litellm_params:
-        model: ollama/zephyr
-
-litellm_settings:
-  drop_params: True
-  success_callback: ["langfuse"] # https://docs.litellm.ai/docs/observability/langfuse_integration
 

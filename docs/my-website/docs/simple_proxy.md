@@ -19,22 +19,56 @@ $ litellm --model huggingface/bigcode/starcoder
 ```
 
 ### Test
-In a new shell, run, this will make an `openai.ChatCompletion` request
+In a new shell, run, this will make an `openai.chat.completions` request. Ensure you're using openai v1.0.0+
 ```shell
 litellm --test
 ```
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Replace openai base
+### Using LiteLLM Proxy - Curl Request, OpenAI Package
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
 
 ```python
-import openai 
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
 
-openai.api_base = "http://0.0.0.0:8000"
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
 
-print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(response)
+
 ```
+</TabItem>
+
+</Tabs>
 
 ### Supported LLMs
 <Tabs>
@@ -49,16 +83,6 @@ $ export AWS_SECRET_ACCESS_KEY=""
 ```shell
 $ litellm --model bedrock/anthropic.claude-v2
 ```
-</TabItem>
-<TabItem value="huggingface" label="Huggingface (TGI)">
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
-```
-```shell
-$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
-```
-
 </TabItem>
 <TabItem value="azure" label="Azure OpenAI">
 
@@ -80,6 +104,23 @@ $ export OPENAI_API_KEY=my-api-key
 ```shell
 $ litellm --model gpt-3.5-turbo
 ```
+</TabItem>
+<TabItem value="huggingface" label="Huggingface (TGI) Deployed">
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+```
+```shell
+$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+```
+
+</TabItem>
+<TabItem value="huggingface-local" label="Huggingface (TGI) Local">
+
+```shell
+$ litellm --model huggingface/<your model name> --api_base http://0.0.0.0:8001
+```
+
 </TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
@@ -306,7 +347,7 @@ Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to ch
 
 MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
 
-## Pre Requisites
+#### Pre Requisites
 ```shell
 pip install litellm
 ```
@@ -314,7 +355,7 @@ pip install litellm
 pip install mlflow
 ```
 
-### Step 1: Start LiteLLM Proxy on the CLI
+#### Step 1: Start LiteLLM Proxy on the CLI
 LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
 
 ```shell
@@ -323,7 +364,7 @@ $ litellm --model huggingface/bigcode/starcoder
 #INFO: Proxy running on http://0.0.0.0:8000
 ```
 
-### Step 2: Run ML Flow
+#### Step 2: Run ML Flow
 Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
 
 ```python
@@ -548,7 +589,7 @@ Curl Command
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-4-team1",
+      "model": "zephyr-alpha",
       "messages": [
         {
           "role": "user",
@@ -558,24 +599,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
-**Setting model name**
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000" 
 
-completion = openai.chat.completions.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
-
-**Setting API Base with model name**
-If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
-
-completion = openai.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
 
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
@@ -615,15 +639,19 @@ Set a model alias for your deployments.
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
+In the config below requests with `model=gpt-4` will route to `ollama/zephyr`
 
 ```yaml
 model_list:
-  - model_name: mistral-7b # ALIAS
+  - model_name: text-davinci-003
     litellm_params:
-      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
-      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
-      api_base: your_api_base # url where model is deployed 
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
 ```
 
 ### Set Custom Prompt Templates
@@ -652,6 +680,57 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
+## Debugging Proxy 
+Run the proxy with `--debug` to easily view debug logs 
+```shell
+litellm --model gpt-3.5-turbo --debug
+```
+
+When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+```shell
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/chat/completions \
+-H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+```
+
+## Logging Proxy Input/Output - Langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+
+**Step 1** Install langfuse
+
+```shell
+pip install langfuse
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
+
+Expected output on Langfuse
+
+<Image img={require('../img/langfuse_small.png')} />
+
 
 ## Proxy CLI Arguments
 

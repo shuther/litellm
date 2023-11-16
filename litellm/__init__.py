@@ -24,7 +24,7 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 retry = True
-request_timeout: float = 600
+request_timeout: Optional[float] = 6000
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -242,7 +242,6 @@ with open("litellm/config/embedding_model.json5") as json5_file:
     bedrock_embedding_models: list = embedding_data["bedrock_embedding_models"]
 
 from .timeout import timeout
-from .testing import *
 from .utils import (
     client,
     exception_type,

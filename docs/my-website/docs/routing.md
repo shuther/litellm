@@ -1,14 +1,15 @@
 import Image from '@theme/IdealImage';
 
-# Reliability - Fallbacks, Azure Deployments, etc.
-
-## Manage Multiple Deployments
+# Manage Multiple Deployments
 
 Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
 
 `Router` prevents failed requests, by picking the deployment which is below rate-limit and has the least amount of tokens used. 
 
 In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
+
+
+(s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
 
 ### Quick Start
 

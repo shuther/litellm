@@ -17,5 +17,6 @@ router_config.yaml
 litellm_server/router_config.yaml
 .vscode/
 **/api_logs.json
-/litellm_server/litellm.secrets.toml
+litellm_server/litellm.secrets.toml
 /.github/workflows/test/
+litellm/proxy/_secret_config.yaml
