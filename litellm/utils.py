@@ -18,7 +18,7 @@ import tiktoken
 import uuid
 import aiohttp
 import logging
-import asyncio
+import asyncio, httpx
 import copy
 from tokenizers import Tokenizer
 from dataclasses import (
@@ -511,6 +511,8 @@ class Logging:
             masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
+            print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
+
             curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
             curl_command += "curl -X POST \\\n"
             curl_command += f"{api_base} \\\n"
@@ -814,6 +816,43 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             run_id=self.litellm_call_id,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "helicone":
+                        print_verbose("reaches helicone for logging!")
+                        model = self.model
+                        messages = kwargs["messages"]
+                        heliconeLogger.log_success(
+                            model=model,
+                            messages=messages,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "langfuse":
+                        print_verbose("reaches langfuse for logging!")
+                        deep_copy = {}
+                        for k, v in self.model_call_details.items(): 
+                            if k != "original_response": # copy.deepcopy raises errors as this could be a coroutine
+                                deep_copy[k] = v
+                        langFuseLogger.log_event(
+                            kwargs=deep_copy,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "traceloop":
+                        deep_copy = {}
+                        for k, v in self.model_call_details.items(): 
+                            if k != "original_response": 
+                                deep_copy[k] = v
+                        traceloopLogger.log_event(
+                            kwargs=deep_copy,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
                             print_verbose=print_verbose,
                         )
                     if isinstance(callback, CustomLogger): # custom logger class 
@@ -1149,7 +1188,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            logging_obj.success_handler(result, start_time, end_time)
+            threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             my_thread = threading.Thread(
                 target=handle_success, args=(args, kwargs, result, start_time, end_time)
@@ -1253,7 +1292,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            logging_obj.success_handler(result, start_time, end_time)
+            threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
             return result
         except Exception as e: 
@@ -1749,15 +1788,15 @@ def get_optional_params(  # use the openai defaults
         # handle anthropic params
         if stream:
             optional_params["stream"] = stream
-        if stop:
+        if stop is not None:
             if type(stop) == str:
                 stop = [stop] # openai can accept str/list for stop
             optional_params["stop_sequences"] = stop
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_tokens_to_sample"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in 
@@ -1766,21 +1805,21 @@ def get_optional_params(  # use the openai defaults
         # handle cohere params
         if stream:
             optional_params["stream"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
-        if n: 
+        if n is not None:
             optional_params["num_generations"] = n
         if logit_bias != {}:
             optional_params["logit_bias"] = logit_bias
-        if top_p: 
+        if top_p is not None:
             optional_params["p"] = top_p
-        if frequency_penalty: 
+        if frequency_penalty is not None:
             optional_params["frequency_penalty"] = frequency_penalty
-        if presence_penalty: 
+        if presence_penalty is not None:
             optional_params["presence_penalty"] = presence_penalty
-        if stop:
+        if stop is not None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "maritalk":
         ## check if unsupported param passed in 
@@ -1789,17 +1828,17 @@ def get_optional_params(  # use the openai defaults
         # handle cohere params
         if stream:
             optional_params["stream"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
         if logit_bias != {}:
             optional_params["logit_bias"] = logit_bias
-        if top_p: 
+        if top_p is not None:
             optional_params["p"] = top_p
-        if presence_penalty: 
+        if presence_penalty is not None:
             optional_params["repetition_penalty"] = presence_penalty
-        if stop:
+        if stop is not None:
             optional_params["stopping_tokens"] = stop
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
@@ -1809,18 +1848,18 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
             return optional_params
-        if max_tokens:
+        if max_tokens is not None:
             if "vicuna" in model or "flan" in model:
                 optional_params["max_length"] = max_tokens
             elif "meta/codellama-13b" in model: 
                 optional_params["max_tokens"] = max_tokens
             else:
                 optional_params["max_new_tokens"] = max_tokens
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if stop:
+        if stop is not None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in 
@@ -1864,15 +1903,15 @@ def get_optional_params(  # use the openai defaults
         
         if stream:
             optional_params["stream_tokens"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
-        if frequency_penalty:
+        if frequency_penalty is not None:
             optional_params["repetition_penalty"] = frequency_penalty # https://docs.together.ai/reference/inference
-        if stop:
+        if stop is not None:
             optional_params["stop"] = stop 
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in 
@@ -1881,36 +1920,36 @@ def get_optional_params(  # use the openai defaults
 
         if stream:
             optional_params["stream"] = stream
-        if n: 
+        if n is not None:
             optional_params["numResults"] = n
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["maxTokens"] = max_tokens
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["topP"] = top_p
-        if stop:
+        if stop is not None:
             optional_params["stopSequences"] = stop
-        if frequency_penalty:
+        if frequency_penalty is not None:
             optional_params["frequencyPenalty"] = {"scale": frequency_penalty}
-        if presence_penalty: 
+        if presence_penalty is not None:
             optional_params["presencePenalty"] = {"scale": presence_penalty}
     elif custom_llm_provider == "palm": # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in 
         supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
         
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
-        if n: 
+        if n is not None:
             optional_params["candidate_count"] = n
-        if stop: 
+        if stop is not None:
             optional_params["stop_sequences"] = stop
-        if max_tokens: 
+        if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
     elif (
         custom_llm_provider == "vertex_ai"
@@ -1919,13 +1958,13 @@ def get_optional_params(  # use the openai defaults
         supported_params = ["temperature", "top_p", "max_tokens", "stream"]
         _check_valid_arg(supported_params=supported_params)
         
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
     elif custom_llm_provider == "sagemaker":
         if "llama-2" in model:
@@ -1940,11 +1979,11 @@ def get_optional_params(  # use the openai defaults
             supported_params = ["temperature", "max_tokens", "stream"]
             _check_valid_arg(supported_params=supported_params)
             
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["max_new_tokens"] = max_tokens
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if top_p:
+            if top_p is not None:
                 optional_params["top_p"] = top_p
             if stream:
                 optional_params["stream"] = stream
@@ -1958,13 +1997,13 @@ def get_optional_params(  # use the openai defaults
             _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["maxTokens"] = max_tokens
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if stop:
+            if stop is not None:
                 optional_params["stop_sequences"] = stop
-            if top_p:
+            if top_p is not None:
                 optional_params["topP"] = top_p
             if stream: 
                 optional_params["stream"] = stream
@@ -1973,13 +2012,13 @@ def get_optional_params(  # use the openai defaults
             _check_valid_arg(supported_params=supported_params)
             # anthropic params on bedrock
             # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["max_tokens_to_sample"] = max_tokens
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if top_p:
+            if top_p is not None:
                 optional_params["top_p"] = top_p
-            if stop:
+            if stop is not None:
                 optional_params["stop_sequences"] = stop
             if stream: 
                 optional_params["stream"] = stream
@@ -1987,13 +2026,13 @@ def get_optional_params(  # use the openai defaults
             supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["maxTokenCount"] = max_tokens
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if stop:
+            if stop is not None:
                 optional_params["stopSequences"] = stop
-            if top_p:
+            if top_p is not None:
                 optional_params["topP"] = top_p
             if stream: 
                 optional_params["stream"] = stream
@@ -2003,86 +2042,86 @@ def get_optional_params(  # use the openai defaults
             # handle cohere params
             if stream:
                 optional_params["stream"] = stream
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["max_tokens"] = max_tokens
-            if n: 
+            if n is not None:
                 optional_params["num_generations"] = n
             if logit_bias != {}:
                 optional_params["logit_bias"] = logit_bias
-            if top_p: 
+            if top_p is not None:
                 optional_params["p"] = top_p
-            if frequency_penalty: 
+            if frequency_penalty is not None:
                 optional_params["frequency_penalty"] = frequency_penalty
-            if presence_penalty: 
+            if presence_penalty is not None:
                 optional_params["presence_penalty"] = presence_penalty
-            if stop:
+            if stop is not None:
                 optional_params["stop_sequences"] = stop
     elif model in litellm.aleph_alpha_models:
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["maximum_tokens"] = max_tokens
         if stream:
             optional_params["stream"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if presence_penalty:
+        if presence_penalty is not None:
             optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty:
+        if frequency_penalty is not None:
             optional_params["frequency_penalty"] = frequency_penalty
-        if n:
+        if n is not None:
             optional_params["n"] = n
-        if stop:
+        if stop is not None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "ollama":
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "frequency_penalty", "stop"]
         _check_valid_arg(supported_params=supported_params)
         
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["num_predict"] = max_tokens
         if stream:
             optional_params["stream"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if frequency_penalty:
+        if frequency_penalty is not None:
             optional_params["repeat_penalty"] = frequency_penalty
-        if stop:
+        if stop is not None:
             optional_params["stop_sequences"] = stop
     elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
         supported_params = ["max_tokens", "stream", "temperature", "top_p", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
 
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_length"] = max_tokens
         if stream:
             optional_params["stream"] = stream
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if presence_penalty:
+        if presence_penalty is not None:
             optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty:
+        if frequency_penalty is not None:
             optional_params["frequency_penalty"] = frequency_penalty
-        if n:
+        if n is not None:
             optional_params["num_return_sequences"] = n
-        if stop:
+        if stop is not None:
             optional_params["stop_sequences"] = stop
     elif model in litellm.petals_models or custom_llm_provider == "petals":
         supported_params = ["max_tokens", "temperature", "top_p", "stream"]
         _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_new_tokens"] = max_tokens
-        if temperature:
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
@@ -2090,8 +2129,8 @@ def get_optional_params(  # use the openai defaults
         supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
-        if temperature != None:
-            if temperature ==0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
+        if temperature is not None:
+            if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
@@ -2315,8 +2354,42 @@ def get_max_tokens(model: str):
             "mode": "chat"
         }
     """
+    def _get_max_position_embeddings(model_name):
+        # Construct the URL for the config.json file
+        config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
+
+        try:
+            # Make the HTTP request to get the raw JSON file
+            response = requests.get(config_url)
+            response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
+
+            # Parse the JSON response
+            config_json = response.json()
+
+            # Extract and return the max_position_embeddings
+            max_position_embeddings = config_json.get("max_position_embeddings")
+
+            if max_position_embeddings is not None:
+                return max_position_embeddings
+            else:
+                return None
+        except requests.exceptions.RequestException as e:
+            return None
     try:
-        return litellm.model_cost[model]
+        if model in litellm.model_cost:
+            return litellm.model_cost[model]
+        model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
+        if custom_llm_provider == "huggingface": 
+            max_tokens = _get_max_position_embeddings(model_name=model)
+            return {
+                "max_tokens": max_tokens,
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "litellm_provider": "huggingface",
+                "mode": "chat"
+            }
+        else: 
+            raise Exception()
     except:
         raise Exception("This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json")
 
@@ -2896,7 +2969,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 raise Exception("Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"]["content"], role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
+                message = Message(content=choice["message"].get("content", None), role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
                 finish_reason = choice.get("finish_reason", None)
                 if finish_reason == None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
@@ -2955,37 +3028,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     slack_app.client.chat_postMessage(
                         channel=alerts_channel, text=slack_msg
                     )
-                elif callback == "helicone":
-                    print_verbose("reaches helicone for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    heliconeLogger.log_success(
-                        model=model,
-                        messages=messages,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                elif callback == "langfuse":
-                    print_verbose("reaches langfuse for logging!")
-                    langFuseLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                
-                elif callback == "traceloop":
-                    traceloopLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-
                 elif callback == "aispend":
                     print_verbose("reaches aispend for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
@@ -3700,8 +3742,6 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
-                exception_mapping_worked = True
-                raise APIError(status_code=500, message=error_str, model=model, llm_provider=custom_llm_provider)
             elif custom_llm_provider == "ai21":
                 if hasattr(original_exception, "message"):
                     if "Prompt has too many tokens" in original_exception.message:
@@ -4018,7 +4058,8 @@ def exception_type(
                         raise APIConnectionError(
                             message=f"VLLMException - {original_exception.message}",
                             llm_provider="vllm",
-                            model=model
+                            model=model,
+                            request=original_exception.request
                         )
             elif custom_llm_provider == "azure": 
                 if "This model's maximum context length is" in error_str:
@@ -4088,13 +4129,22 @@ def exception_type(
                 llm_provider=custom_llm_provider,
                 response=original_exception.response
             )
-        else:
+        else: # ensure generic errors always return APIConnectionError
             exception_mapping_worked = True
-            raise APIConnectionError(
-                message=f"{str(original_exception)}",
-                llm_provider=custom_llm_provider,
-                model=model
-            )
+            if hasattr(original_exception, "request"):
+                raise APIConnectionError(
+                    message=f"{str(original_exception)}",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    request=original_exception.request
+                )
+            else: 
+                raise APIConnectionError( 
+                    message=f"{str(original_exception)}",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    request= httpx.Request(method="POST", url="https://api.openai.com/v1/") # stub the request
+                )
     except Exception as e:
         # LOGGING
         exception_logging(
@@ -4297,7 +4347,6 @@ class CustomStreamWrapper:
 
     def handle_huggingface_chunk(self, chunk):
         try:
-            chunk = chunk.decode("utf-8")
             text = "" 
             is_finished = False
             finish_reason = ""
@@ -4398,10 +4447,11 @@ class CustomStreamWrapper:
         elif chunk.startswith("data:"):
             data_json = json.loads(chunk[5:]) # chunk.startswith("data:"):
             try:
-                text = data_json["choices"][0]["delta"].get("content", "") 
-                if data_json["choices"][0].get("finish_reason", None): 
-                    is_finished = True
-                    finish_reason = data_json["choices"][0]["finish_reason"]
+                if len(data_json["choices"]) > 0: 
+                    text = data_json["choices"][0]["delta"].get("content", "") 
+                    if data_json["choices"][0].get("finish_reason", None): 
+                        is_finished = True
+                        finish_reason = data_json["choices"][0]["finish_reason"]
                 print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             except:
@@ -4723,7 +4773,7 @@ class CustomStreamWrapper:
             e.message = str(e)
              # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
-            return exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=e)
+            raise exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=e)
 
     ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
@@ -4744,7 +4794,7 @@ class CustomStreamWrapper:
             raise  # Re-raise StopIteration
         except Exception as e:
             # Handle other exceptions if needed
-            pass
+            raise e
 
 
         
@@ -4753,7 +4803,8 @@ class CustomStreamWrapper:
             if (self.custom_llm_provider == "openai" 
                 or self.custom_llm_provider == "azure"
                 or self.custom_llm_provider == "custom_openai"
-                or self.custom_llm_provider == "text-completion-openai"):
+                or self.custom_llm_provider == "text-completion-openai"
+                or self.custom_llm_provider == "huggingface"):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
                         raise Exception

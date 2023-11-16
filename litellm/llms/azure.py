@@ -4,6 +4,7 @@ from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object
 from typing import Callable, Optional
 from litellm import OpenAIConfig
+import litellm
 import httpx
 
 class AzureOpenAIError(Exception):
@@ -146,6 +147,7 @@ class AzureChatCompletion(BaseLLM):
                     url=api_base,
                     json=data,
                     headers=headers,
+                    timeout=litellm.request_timeout
                 )
                 if response.status_code != 200:
                     raise AzureOpenAIError(status_code=response.status_code, message=response.text)
@@ -163,7 +165,7 @@ class AzureChatCompletion(BaseLLM):
            self._aclient_session = self.create_aclient_session()
        client = self._aclient_session
        try:
-            response = await client.post(api_base, json=data, headers=headers) 
+            response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
             response_json = response.json()
             if response.status_code != 200:
                 raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
@@ -192,10 +194,11 @@ class AzureChatCompletion(BaseLLM):
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    method="POST"
+                    method="POST",
+                    timeout=litellm.request_timeout
                 ) as response: 
                     if response.status_code != 200:
-                        raise AzureOpenAIError(status_code=response.status_code, message=response.text)
+                        raise AzureOpenAIError(status_code=response.status_code, message="An error occurred while streaming")
                     
                     completion_stream = response.iter_lines()
                     streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
@@ -216,7 +219,8 @@ class AzureChatCompletion(BaseLLM):
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    method="POST"
+                    method="POST",
+                    timeout=litellm.request_timeout
                 ) as response: 
             if response.status_code != 200:
                 raise AzureOpenAIError(status_code=response.status_code, message=response.text)
@@ -261,7 +265,7 @@ class AzureChatCompletion(BaseLLM):
                 )
             ## COMPLETION CALL
             response = self._client_session.post(
-                api_base, headers=headers, json=data
+                api_base, headers=headers, json=data, timeout=litellm.request_timeout
             )
             ## LOGGING
             logging_obj.post_call(
