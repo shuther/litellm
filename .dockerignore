@@ -6,3 +6,11 @@ __pycache__
 **/.DS_Store
 **/Thumbs.db
 **/*.example
+.idea
+
+#Docs
+cookbook
+dist
+docs
+#we keep it for debugging
+#**/.flake8
