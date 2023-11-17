@@ -16,29 +16,73 @@ from litellm import completion, acompletion, acreate
 litellm.num_retries = 3
 
 def test_sync_response():
-    litellm.set_verbose = True
+    litellm.set_verbose = False
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages, api_key=os.environ["OPENAI_API_KEY"])
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
+# test_sync_response()
 
+def test_sync_response_anyscale():
+    litellm.set_verbose = True
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = completion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages)
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
 
-def test_async_response():
+# test_sync_response_anyscale()
+
+def test_async_response_openai():
     import asyncio
     litellm.set_verbose = True
     async def test_get_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages)
             print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
     asyncio.run(test_get_response())
-# test_async_response()
+
+# test_async_response_openai()
+
+def test_async_response_azure():
+    import asyncio
+    litellm.set_verbose = True
+    async def test_get_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(model="azure/chatgpt-v-2", messages=messages)
+            print(f"response: {response}")
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+
+    asyncio.run(test_get_response())
+
+
+def test_async_anyscale_response():
+    import asyncio
+    litellm.set_verbose = True
+    async def test_get_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages)
+            # response = await response
+            print(f"response: {response}")
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+
+    asyncio.run(test_get_response())
+
+# test_async_anyscale_response()
 
 def test_get_response_streaming():
     import asyncio
@@ -79,7 +123,7 @@ def test_get_response_non_openai_streaming():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages, stream=True)
+            response = await acompletion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, stream=True)
             print(type(response))
 
             import inspect
@@ -101,3 +145,5 @@ def test_get_response_non_openai_streaming():
             pytest.fail(f"An exception occurred: {e}")
         return response
     asyncio.run(test_async_call())
+
+# test_get_response_non_openai_streaming()
