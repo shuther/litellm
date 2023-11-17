@@ -31,7 +31,37 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt()
+# test_completion_openai_prompt()
+
+def test_completion_openai_engine_and_model():
+    try:
+        print("\n text 003 test\n")
+        litellm.set_verbose=True
+        response = text_completion(
+            model="text-davinci-003", engine="anything", prompt="What's the weather in SF?", max_tokens=5
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        # print(response.choices[0])
+        #print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_engine_and_model()
+
+def test_completion_openai_engine():
+    try:
+        print("\n text 003 test\n")
+        litellm.set_verbose=True
+        response = text_completion(
+            engine="text-davinci-003", prompt="What's the weather in SF?", max_tokens=5
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        # print(response.choices[0])
+        #print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_engine()
 
 
 def test_completion_chatgpt_prompt():
@@ -105,7 +135,7 @@ def test_completion_text_003_prompt_array():
 ##### hugging face tests
 def test_completion_hf_prompt_array():
     try:
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         print("\n testing hf mistral\n")
         response = text_completion(
             model="huggingface/mistralai/Mistral-7B-v0.1", 
@@ -125,11 +155,16 @@ def test_completion_hf_prompt_array():
 # test_completion_hf_prompt_array()
 
 def test_text_completion_stream():
-    response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1", 
-            prompt="good morning",
-            stream=True
-        )
-    for chunk in response:
-        print(chunk)
+    try:
+        response = text_completion(
+                model="huggingface/mistralai/Mistral-7B-v0.1", 
+                prompt="good morning",
+                stream=True,
+                max_tokens=10,
+            )
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"GOT exception for HF In streaming{e}")
+
 test_text_completion_stream()

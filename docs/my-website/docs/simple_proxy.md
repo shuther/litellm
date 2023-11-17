@@ -8,6 +8,9 @@ LiteLLM Server manages:
 
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
+* Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
+
+[**See code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 ## Quick Start 
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
@@ -221,7 +224,10 @@ LiteLLM allows you to set `openai.api_base` to the proxy server and use all Lite
 <TabItem value="lm-harness" label="LM-Harness Evals">
 This tutorial assumes you're using the `big-refactor` branch of LM Harness https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor
 
+NOTE: LM Harness has not updated to using `openai 1.0.0+`, in order to deal with this we will run lm harness in a venv
+
 **Step 1: Start the local proxy**
+see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 ```
@@ -232,10 +238,22 @@ Using a custom api base
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 $ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
 ```
-
 OpenAI Compatible Endpoint at http://0.0.0.0:8000
 
-**Step 2: Set OpenAI API Base & Key**
+**Step 2: Create a Virtual Env for LM Harness + Use OpenAI 0.28.1**
+We will now run lm harness with a new virtual env with openai==0.28.1
+
+```shell
+python3 -m venv lmharness 
+source lmharness/bin/activate
+```
+
+Pip install openai==0.28.01 in the venv
+```shell
+pip install openai==0.28.01
+```
+
+**Step 3: Set OpenAI API Base & Key**
 ```shell
 $ export OPENAI_API_BASE=http://0.0.0.0:8000
 ```
@@ -245,7 +263,15 @@ LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for run
 export OPENAI_API_SECRET_KEY=anything
 ```
 
-**Step 3: Run LM-Eval-Harness**
+**Step 4: Run LM-Eval-Harness**
+```shell
+cd lm-evaluation-harness
+```
+
+pip install lm harness dependencies in venv
+```
+python3 -m pip install -e .
+```
 
 ```shell
 python3 -m lm_eval \
@@ -549,7 +575,7 @@ general_settings:
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
 
-### Quick Start - Config 
+### Multiple Models - Quick Start
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -570,8 +596,11 @@ model_list:
       api_key: sk-claude    
 ```
 
-#### Default Model - Config:
+:::info
+
 The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
+:::
+
 
 #### Step 2: Start Proxy with config
 
@@ -579,11 +608,7 @@ The proxy uses the first model in the config as the default model - in this conf
 $ litellm --config /path/to/config.yaml
 ```
 
-#### Step 3: Start Proxy with config
-
-If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
-
-#### Step 4: Use proxy
+#### Step 3: Use proxy
 Curl Command
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
@@ -599,6 +624,8 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
+
+
 
 
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
@@ -652,6 +679,53 @@ model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
         model: ollama/llama2
+```
+
+### Multiple Instances of 1 model
+
+If you have multiple instances of the same model,
+
+in the `config.yaml` just add all of them with the same 'model_name', and the proxy will handle routing requests (using LiteLLM's Router). 
+
+In the config below requests with `model=zephyr-beta` will be routed across multiple instances of `HuggingFaceH4/zephyr-7b-beta`
+
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+```
+
+#### Step 2: Start Proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Step 3: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
 ```
 
 ### Set Custom Prompt Templates
@@ -866,223 +940,4 @@ Expected output on Langfuse
      litellm --telemetry False
      ```
 
-
-
-<!-- 
-## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, LlamaIndex, etc.)
-
-**Start server:**
-```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
-The server is now live on http://0.0.0.0:8000
-
-<Tabs>
-<TabItem value="chat-ui" label="Chat UI">
-
-Here's the `docker-compose.yml` for running LiteLLM Server with Mckay Wrigley's Chat-UI: 
-```yaml
-version: '3'
-services:
-  container1:
-    image: ghcr.io/berriai/litellm:latest
-    ports:
-      - '8000:8000'
-    environment:
-      - PORT=8000
-      - OPENAI_API_KEY=<your-openai-key>
-
-  container2:
-    image: ghcr.io/mckaywrigley/chatbot-ui:main
-    ports:
-      - '3000:3000'
-    environment:
-      - OPENAI_API_KEY=my-fake-key
-      - OPENAI_API_HOST=http://container1:8000
-```
-
-Run this via: 
-```shell
-docker-compose up
-```
-</TabItem>
-<TabItem value="nemo-guardrails" label="NeMO-Guardrails">
-
-#### Adding NeMO-Guardrails to Bedrock 
-
-1. Start server
-```shell
-`docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-aws-access-key> -e AWS_SECRET_ACCESS_KEY=<your-aws-secret-key> -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
-
-2. Install dependencies
-```shell
-pip install nemoguardrails langchain
-```
-
-3. Run script
-```python
-import openai
-from langchain.chat_models import ChatOpenAI
-
-llm = ChatOpenAI(model_name="bedrock/anthropic.claude-v2", openai_api_base="http://0.0.0.0:8000", openai_api_key="my-fake-key")
-
-from nemoguardrails import LLMRails, RailsConfig
-
-config = RailsConfig.from_path("./config.yml")
-app = LLMRails(config, llm=llm)
-
-new_message = app.generate(messages=[{
-    "role": "user",
-    "content": "Hello! What can you do for me?"
-}])
-``` 
-</TabItem>
-<TabItem value="prompttools" label="PromptTools">
-
-Use [PromptTools](https://github.com/hegelai/prompttools) for evaluating different LLMs
-
-1. Start server
-```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
-
-2. Install dependencies 
-```python 
-pip install prompttools
-```
-
-3. Run script 
-```python 
-import os
-os.environ['DEBUG']=""  # Set this to "" to call OpenAI's API
-os.environ['AZURE_OPENAI_KEY'] = "my-api-key"  # Insert your key here
-
-from typing import Dict, List
-from prompttools.experiment import OpenAIChatExperiment
-
-models = ["gpt-3.5-turbo", "gpt-3.5-turbo-0613"]
-messages = [
-    [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Who was the first president?"},
-    ]
-]
-temperatures = [0.0, 1.0]
-# You can add more parameters that you'd like to test here.
-
-experiment = OpenAIChatExperiment(models, messages, temperature=temperatures, azure_openai_service_configs={"AZURE_OPENAI_ENDPOINT": "http://0.0.0.0:8000", "API_TYPE": "azure", "API_VERSION": "2023-05-15"})
-```
-</TabItem>
-<TabItem value="phoenix-arizeai" label="ArizeAI">
-
-Use [Arize AI's LLM Evals](https://github.com/Arize-ai/phoenix#llm-evals) to evaluate different LLMs
-
-1. Start server
-```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
-
-2. Use this LLM Evals Quickstart colab
-[![Open in Colab](https://img.shields.io/static/v1?message=Open%20in%20Colab&logo=googlecolab&labelColor=grey&color=blue&logoColor=orange&label=%20)](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/evals/evaluate_relevance_classifications.ipynb)
-
-3. Call the model
-```python
-import openai 
-
-## SET API BASE + PROVIDER KEY
-openai.api_base = "http://0.0.0.0:8000
-openai.api_key = "my-anthropic-key"
-
-## CALL MODEL 
-model = OpenAIModel(
-    model_name="claude-2",
-    temperature=0.0,
-)
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.schema import AIMessage, HumanMessage, SystemMessage
-
-chat = ChatOpenAI(model_name="claude-instant-1", openai_api_key="my-anthropic-key", openai_api_base="http://0.0.0.0:8000")
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that translates English to French."
-    ),
-    HumanMessage(
-        content="Translate this sentence from English to French. I love programming."
-    ),
-]
-chat(messages)
-```
-</TabItem>
-<TabItem value="ragas" label="ragas">
-
-#### Evaluating with Open-Source LLMs 
-
-Use [Ragas](https://github.com/explodinggradients/ragas/blob/7b123533df80d0ada33a2cb2dd2fdedf36807f33/docs/howtos/customisations/llms.ipynb#L247) to evaluate LLMs for RAG-scenarios.
-```python
-from langchain.chat_models import ChatOpenAI
-
-inference_server_url = "http://localhost:8080/v1"
-
-chat = ChatOpenAI(
-    model="bedrock/anthropic.claude-v2",
-    openai_api_key="no-key",
-    openai_api_base=inference_server_url,
-    max_tokens=5,
-    temperature=0,
-)
-
-from ragas.metrics import (
-    context_precision,
-    answer_relevancy,
-    faithfulness,
-    context_recall,
-)
-from ragas.metrics.critique import harmfulness
-
-# change the LLM
-
-faithfulness.llm.langchain_llm = chat
-answer_relevancy.llm.langchain_llm = chat
-context_precision.llm.langchain_llm = chat
-context_recall.llm.langchain_llm = chat
-harmfulness.llm.langchain_llm = chat
-
-
-# evaluate
-from ragas import evaluate
-
-result = evaluate(
-    fiqa_eval["baseline"].select(range(5)),  # showing only 5 for demonstration
-    metrics=[faithfulness],
-)
-
-result
-```
-</TabItem>
-<TabItem value="llama_index" label="Llama Index">
-
-```python
-!pip install llama-index
-```
-```python
-from llama_index.llms import OpenAI
-
-response = OpenAI(model="claude-2", api_key="your-anthropic-key",api_base="http://0.0.0.0:8000").complete('Paul Graham is ')
-print(response)
-```
-</TabItem>
-</Tabs> -->
 

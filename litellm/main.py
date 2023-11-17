@@ -5,7 +5,7 @@
 # |                                               |
 # +-----------------------------------------------+
 #
-#  Thank you ! We ❤️ you! - Krrish & Ishaan
+#  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 import asyncio
 import contextvars
@@ -334,7 +334,7 @@ def completion(
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     ### CUSTOM PROMPT TEMPLATE ### 
-    initial_prompt_value = kwargs.get("intial_prompt_value", None)
+    initial_prompt_value = kwargs.get("initial_prompt_value", None)
     roles = kwargs.get("roles", None)
     final_prompt_value = kwargs.get("final_prompt_value", None)
     bos_token = kwargs.get("bos_token", None)
@@ -953,8 +953,6 @@ def completion(
                 {
                     "HTTP-Referer": openrouter_site_url,
                     "X-Title": openrouter_app_name,
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}"
                 }
             )
 
@@ -1830,8 +1828,8 @@ def embedding(
 
 ###### Text Completion ################
 def text_completion(
-    model: str,                   # Required: ID of the model to use.
     prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
+    model: Optional[str],                 # Optional: either `model` or `engine` can be set
     best_of: Optional[int] = None,   # Optional: Generates best_of completions server-side.
     echo: Optional[bool] = None,  # Optional: Echo back the prompt in addition to the completion.
     frequency_penalty: Optional[float] = None, # Optional: Penalize new tokens based on their existing frequency.
@@ -1886,7 +1884,9 @@ def text_completion(
         Your example of how to use this function goes here.
     """
     if "engine" in  kwargs:
-        model = kwargs["engine"]
+        if model==None:
+            # only use engine when model not passed
+            model = kwargs["engine"]
         kwargs.pop("engine")
 
     text_completion_response = TextCompletionResponse()
@@ -1931,7 +1931,7 @@ def text_completion(
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base) # type: ignore
 
     if custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3

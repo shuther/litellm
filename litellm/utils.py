@@ -512,6 +512,8 @@ class Logging:
 
             # User Logging -> if you pass in a custom logging function
             headers = additional_args.get("headers", {})
+            if headers is None: 
+                headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
             masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
@@ -700,7 +702,7 @@ class Logging:
             
             ## BUILD COMPLETE STREAMED RESPONSE
             if self.stream: 
-                if result.choices[0].finish_reason: # if it's the last chunk 
+                if result.choices[0].finish_reason is not None: # if it's the last chunk
                     self.streaming_chunks.append(result)
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
                 else:
@@ -838,12 +840,20 @@ class Logging:
                         )
                     if callback == "langfuse":
                         print_verbose("reaches langfuse for logging!")
-                        deep_copy = {}
+                        kwargs = {}
                         for k, v in self.model_call_details.items(): 
                             if k != "original_response": # copy.deepcopy raises errors as this could be a coroutine
-                                deep_copy[k] = v
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                return
+                            else:
+                                print_verbose("reaches langfuse for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
                         langFuseLogger.log_event(
-                            kwargs=deep_copy,
+                            kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -1050,6 +1060,16 @@ def client(original_function):
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
             function_id = kwargs["id"] if "id" in kwargs else None
+            if litellm.client_session is None: 
+                litellm.client_session = httpx.Client(
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                    timeout = None
+                )
+            if litellm.aclient_session is None: 
+                litellm.aclient_session = httpx.AsyncClient(
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                    timeout = None
+                )
             if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
                 if "lite_debugger" not in litellm.input_callback:
@@ -2040,6 +2060,18 @@ def get_optional_params(  # use the openai defaults
                 optional_params["stopSequences"] = stop
             if top_p is not None:
                 optional_params["topP"] = top_p
+            if stream: 
+                optional_params["stream"] = stream
+        elif "meta" in model: # amazon / meta llms
+            supported_params = ["max_tokens", "temperature", "top_p", "stream"]
+            _check_valid_arg(supported_params=supported_params)
+            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
+            if max_tokens is not None:
+                optional_params["max_gen_len"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if top_p is not None:
+                optional_params["top_p"] = top_p
             if stream: 
                 optional_params["stream"] = stream
         elif "cohere" in model: # cohere models on bedrock
@@ -3165,7 +3197,7 @@ def register_prompt_template(model: str, roles: dict, initial_prompt_value: str 
     )
     ```
     """
-    model, _ = get_llm_provider(model=model)
+    model = get_llm_provider(model=model)[0]
     litellm.custom_prompt_dict[model] = {
         "roles": roles,
         "initial_prompt_value": initial_prompt_value,
@@ -3581,6 +3613,14 @@ def exception_type(
                 if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
+                        message=f"VertexAIException - {error_str}", 
+                        model=model, 
+                        llm_provider="vertex_ai",
+                        response=original_exception.response
+                    )
+                elif "403 Permission denied" in error_str: 
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
                         message=f"VertexAIException - {error_str}", 
                         model=model, 
                         llm_provider="vertex_ai",
@@ -4353,6 +4393,8 @@ class CustomStreamWrapper:
 
     def handle_huggingface_chunk(self, chunk):
         try:
+            if type(chunk) != str:
+                chunk = chunk.decode("utf-8") # DO NOT REMOVE this: This is required for HF inference API + Streaming
             text = "" 
             is_finished = False
             finish_reason = ""
@@ -4491,26 +4533,13 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
-            if "data: [DONE]" in str_line:
-                # anyscale returns a [DONE] special char for streaming, this cannot be json loaded. This is the end of stream
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-            elif str_line.startswith("data:") and len(str_line[5:]) > 0:
-                str_line = str_line[5:]
-                data_json = json.loads(str_line)
-                print_verbose(f"delta content: {data_json['choices'][0]['delta']}")
-                text = data_json["choices"][0]["delta"].get("content", "") 
-                if data_json["choices"][0].get("finish_reason", None): 
+            if len(str_line.choices) > 0: 
+                if str_line.choices[0].delta.content is not None:
+                    text = str_line.choices[0].delta.content
+                if str_line.choices[0].finish_reason:
                     is_finished = True
-                    finish_reason = data_json["choices"][0]["finish_reason"]
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-            elif "error" in str_line:
-                raise ValueError(f"Unable to parse response. Original response: {str_line}")
-            else:
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-
+                    finish_reason = str_line.choices[0].finish_reason
+            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -4590,6 +4619,9 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = stop_reason
             ######## bedrock.cohere mappings ###############
+            # meta mapping
+            elif "generation" in chunk_data:
+                text = chunk_data['generation'] # bedrock.meta
             # cohere mapping
             elif "text" in chunk_data:
                 text = chunk_data["text"] # bedrock.cohere
@@ -4639,15 +4671,6 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider and self.custom_llm_provider == "azure": 
-                response_obj = self.handle_azure_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"response_obj: {response_obj}")
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
-                if response_obj["is_finished"]: 
-                    model_response.choices[0].finish_reason = response_obj["finish_reason"]
-                    print_verbose(f"model_response finish reason 2: {model_response.choices[0].finish_reason}")
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
                 response_obj = self.handle_maritalk_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -4744,6 +4767,8 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             else: # openai chat model
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
+                if response_obj == None:
+                    return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
