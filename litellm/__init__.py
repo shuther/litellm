@@ -255,6 +255,7 @@ from .utils import (
     acreate,
     get_model_list,
     get_max_tokens,
+    get_model_info,
     register_prompt_template,
     validate_environment,
     check_valid_key,

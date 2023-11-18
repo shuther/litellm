@@ -2,12 +2,18 @@
 # Keep this syntax directive! It's used to enable Docker BuildKit
 FROM python:3.10-slim as python-base
 # FROM python:3.9.17-slim as python-base
+#slim for now allows us to save 500Mb of data
 
 #Source: https://gist.github.com/nanmu42/57db1e016bb5c8e326d096c44f8aa93e
 #i.e.
 #prod: docker build -t litellm-b . --progress=plain
 #dev: docker build -t litellm-b . --progress=plain --target development
+#dev: docker build -t litellm-b . --progress=plain --target production
 ARG PORT=8000
+ARG NUM_WORKERS=10
+ARG CONFIG_FILE_PATH=config.yaml
+#ENV NODE_ENV=production
+#RUN if [ "x$mode" = "xdev" ] ; then echo "Development" ; else echo "Production" ; fi
 
     # Python
 ENV PYTHONUNBUFFERED=1 \
@@ -58,7 +64,9 @@ RUN apt-get update && \
     build-essential \
     git \
     nano \
-    curl
+    curl && \
+    rm -rf /var/lib/apt/lists/*
+# rm could not be needed
 
 # install Node.js. Remove if you don't need.
 #RUN mkdir -p /etc/apt/keyrings && \
@@ -109,7 +117,7 @@ RUN --mount=type=cache,target=/root/.cache \
 
 EXPOSE $PORT
 #CMD ["bash"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "$NUM_WORKERS", "--config", "$CONFIG_FILE_PATH"]
 
 ################################
 # PRODUCTION
@@ -137,4 +145,4 @@ COPY . /app
 
 EXPOSE $PORT
 WORKDIR /app/litellm
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "$NUM_WORKERS", "--config", "$CONFIG_FILE_PATH"]

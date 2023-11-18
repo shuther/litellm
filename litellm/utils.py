@@ -17,11 +17,14 @@ import threading
 import time
 import traceback
 import uuid
-
 import dotenv
 import httpx
 import openai
 import requests
+import aiohttp
+import logging
+import asyncio, httpx, inspect
+import copy
 import tiktoken
 from tokenizers import Tokenizer
 
@@ -128,14 +131,30 @@ class FunctionCall(OpenAIObject):
     arguments: str
     name: str
 
+class Function(OpenAIObject):
+    arguments: str
+    name: str
+
+class ChatCompletionMessageToolCall(OpenAIObject):
+    id: str
+    function: Function
+    type: str
+
 class Message(OpenAIObject):
-    def __init__(self, content="default", role="assistant", logprobs=None, function_call=None, **params):
+    def __init__(self, content="default", role="assistant", logprobs=None, function_call=None, tool_calls=None, **params):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
-        self._logprobs = logprobs
-        if function_call: 
+        if function_call is not None:
             self.function_call = FunctionCall(**function_call)
+        if tool_calls is not None:
+            self.tool_calls = []
+            for tool_call in tool_calls:
+                self.tool_calls.append(
+                    ChatCompletionMessageToolCall(**tool_call)
+                )
+        if logprobs is not None:
+            self._logprobs = logprobs
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -525,7 +544,7 @@ class Logging:
             curl_command += "curl -X POST \\\n"
             curl_command += f"{api_base} \\\n"
             curl_command += f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
-            curl_command += f"-d '{json.dumps(data)}'\n"
+            curl_command += f"-d '{str(data)}'\n"
             if api_base == "":
                 curl_command = self.model_call_details
 
@@ -630,7 +649,7 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(f"RAW RESPONSE: {self.model_call_details}\n\n")
+            print_verbose(f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n")
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
@@ -1053,23 +1072,12 @@ def exception_logging(
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
     global liteDebuggerClient, get_all_keys
-    import inspect
     def function_setup(
         start_time, *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
             function_id = kwargs["id"] if "id" in kwargs else None
-            if litellm.client_session is None: 
-                litellm.client_session = httpx.Client(
-                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-                    timeout = None
-                )
-            if litellm.aclient_session is None: 
-                litellm.aclient_session = httpx.AsyncClient(
-                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-                    timeout = None
-                )
             if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
                 if "lite_debugger" not in litellm.input_callback:
@@ -1339,13 +1347,13 @@ def client(original_function):
                         kwargs["retry_strategy"] = "exponential_backoff_retry"
                     elif (isinstance(e, openai.APIError)): # generic api error
                         kwargs["retry_strategy"] = "constant_retry"
-                    return litellm.completion_with_retries(*args, **kwargs)
+                    return await litellm.acompletion_with_retries(*args, **kwargs)
                 elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
                     if len(args) > 0:
                         args[0]  = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
-                    return original_function(*args, **kwargs)
+                    return await original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
@@ -1757,6 +1765,10 @@ def get_optional_params(  # use the openai defaults
     user="",
     model=None,
     custom_llm_provider="",
+    response_format=None,
+    seed=None,
+    tools=None,
+    tool_choice=None,
     **kwargs
 ):
     # retrieve all parameters passed to the function
@@ -1779,6 +1791,10 @@ def get_optional_params(  # use the openai defaults
         "user":"",
         "model":None,
         "custom_llm_provider":"",
+        "response_format": None,
+        "seed": None,
+        "tools": None,
+        "tool_choice": None
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
@@ -2172,7 +2188,7 @@ def get_optional_params(  # use the openai defaults
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
@@ -2365,7 +2381,59 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
 
 def get_max_tokens(model: str):
     """
-    Get a dict for the maximum tokens (context window), 
+    Get the maximum number of tokens allowed for a given model.
+
+    Parameters:
+    model (str): The name of the model.
+
+    Returns:
+        int: The maximum number of tokens allowed for the given model.
+
+    Raises:
+        Exception: If the model is not mapped yet.
+
+    Example:
+        >>> get_max_tokens("gpt-4")
+        8192
+    """
+    def _get_max_position_embeddings(model_name):
+        # Construct the URL for the config.json file
+        config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
+
+        try:
+            # Make the HTTP request to get the raw JSON file
+            response = requests.get(config_url)
+            response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
+
+            # Parse the JSON response
+            config_json = response.json()
+
+            # Extract and return the max_position_embeddings
+            max_position_embeddings = config_json.get("max_position_embeddings")
+
+            if max_position_embeddings is not None:
+                return max_position_embeddings
+            else:
+                return None
+        except requests.exceptions.RequestException as e:
+            return None
+
+    try:
+        if model in litellm.model_cost:
+            return litellm.model_cost[model]["max_tokens"]
+        model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
+        if custom_llm_provider == "huggingface":
+            max_tokens = _get_max_position_embeddings(model_name=model)
+            return max_tokens
+        else:
+            raise Exception()
+    except:
+        raise Exception("This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json")
+
+
+def get_model_info(model: str):
+    """
+    Get a dict for the maximum tokens (context window),
     input_cost_per_token, output_cost_per_token  for a given model.
 
     Parameters:
@@ -2383,7 +2451,7 @@ def get_max_tokens(model: str):
         Exception: If the model is not mapped yet.
 
     Example:
-        >>> get_max_tokens("gpt-4")
+        >>> get_model_info("gpt-4")
         {
             "max_tokens": 8192,
             "input_cost_per_token": 0.00003,
@@ -3007,7 +3075,12 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 raise Exception("Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"].get("content", None), role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
+                message = Message(
+                    content=choice["message"].get("content", None),
+                    role=choice["message"]["role"],
+                    function_call=choice["message"].get("function_call", None),
+                    tool_calls=choice["message"].get("tool_calls", None)
+                )
                 finish_reason = choice.get("finish_reason", None)
                 if finish_reason == None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
@@ -3022,7 +3095,10 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
             if "id" in response_object: 
                 model_response_object.id = response_object["id"]
             
-            if "model" in response_object: 
+            if "system_fingerprint" in response_object:
+                model_response_object.system_fingerprint = response_object["system_fingerprint"]
+
+            if "model" in response_object:
                 model_response_object.model = response_object["model"]
             return model_response_object
         except Exception as e: 
@@ -3316,7 +3392,7 @@ def exception_type(
             else:
                 exception_type = ""
             
-            if "Request Timeout Error" in error_str: 
+            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
                 exception_mapping_worked = True
                 raise Timeout(
                     message=f"APITimeoutError - Request timed out",
@@ -3357,7 +3433,6 @@ def exception_type(
                             message=f"OpenAIException - {original_exception.message}",
                             model=model,
                             llm_provider="openai",
-                            request=original_exception.request
                         )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
@@ -4175,7 +4250,7 @@ def exception_type(
                 llm_provider=custom_llm_provider,
                 response=original_exception.response
             )
-        else: # ensure generic errors always return APIConnectionError
+        else: # ensure generic errors always return APIConnectionError=
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(

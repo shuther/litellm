@@ -13,7 +13,7 @@ secrets.toml
 .idea/
 router_config.yaml
 **/config.yaml
-litellm_server/router_config.yaml
+router_config.yaml
 .vscode/
 **/api_logs.json
 **/litellm.secrets.toml

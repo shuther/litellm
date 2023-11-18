@@ -79,6 +79,31 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
+## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
+**If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+
+### Step 1: Start litellm proxy
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Replace openai base
+```python
+import openai # openai v1.0.0+
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+```
+
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 ```python
@@ -95,23 +120,6 @@ litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to pr
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-```
-
-## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-**If you don't want to make code changes to add the litellm package to your code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
-
-### Step 1: Start litellm proxy
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-
-#INFO: Proxy running on http://0.0.0.0:8000
-```
-
-### Step 2: Replace openai base
-```python
-import openai
-client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:8000")
-print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
