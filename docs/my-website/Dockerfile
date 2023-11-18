@@ -10,6 +10,8 @@ FROM python:3.10-slim as python-base
 #dev: docker build -t litellm-b . --progress=plain --target development
 #dev: docker build -t litellm-b . --progress=plain --target production
 ARG PORT=8000
+ARG NUM_WORKERS=10
+ARG CONFIG_FILE_PATH=config.yaml
 #ENV NODE_ENV=production
 #RUN if [ "x$mode" = "xdev" ] ; then echo "Development" ; else echo "Production" ; fi
 
@@ -115,7 +117,7 @@ RUN --mount=type=cache,target=/root/.cache \
 
 EXPOSE $PORT
 #CMD ["bash"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "$NUM_WORKERS", "--config", "$CONFIG_FILE_PATH"]
 
 ################################
 # PRODUCTION
@@ -143,4 +145,4 @@ COPY . /app
 
 EXPOSE $PORT
 WORKDIR /app/litellm
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "$NUM_WORKERS", "--config", "$CONFIG_FILE_PATH"]

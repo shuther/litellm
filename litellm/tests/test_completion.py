@@ -434,10 +434,17 @@ def test_completion_openai_with_optional_params():
     try:
         litellm.set_verbose = True
         response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
+            model="gpt-3.5-turbo-1106",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "respond in valid, json - what is the day"
+                }
+            ],
             temperature=0.5,
             top_p=0.1,
+            seed=12,
+            response_format={ "type": "json_object" }
         )
         # Add any assertions here to check the response
         print(response)
@@ -446,7 +453,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_openai_with_optional_params()
+test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
@@ -494,7 +501,7 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openrouter1() 
+# test_completion_openrouter1() 
 
 def test_completion_hf_model_no_provider():
     try:
@@ -840,7 +847,7 @@ def test_customprompt_together_ai():
         litellm.set_verbose = False
         litellm.num_retries = 0
         response = completion(
-            model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10",
+            model="together_ai/togethercomputer/llama-2-70b-chat",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
@@ -853,7 +860,7 @@ def test_customprompt_together_ai():
         print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
-# test_customprompt_together_ai()
+test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
