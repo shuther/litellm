@@ -163,7 +163,7 @@ for key, value in model_cost.items():
         "replicate",
         "ollama",
         "anyscale",
-        "together",
+        "together_ai",
     ]:
         pass
     elif value.get("litellm_provider") == "None":
