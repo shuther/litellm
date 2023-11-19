@@ -58,7 +58,7 @@ def validate_first_format(chunk):
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 second_openai_chunk_example = {
@@ -87,7 +87,7 @@ def validate_second_format(chunk):
 
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 last_openai_chunk_example = {
@@ -128,11 +128,11 @@ def streaming_format_tests(idx, chunk):
         validate_second_format(chunk=chunk)
     if idx != 0: # ensure no role
         if "role" in chunk["choices"][0]["delta"]:
-            raise Exception("role should not exist after first chunk")
+            pass # openai v1.0.0+ passes role = None
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
-    if "content" in chunk["choices"][0]["delta"]:
+    if "content" in chunk["choices"][0]["delta"] and chunk["choices"][0]["delta"]["content"] is not None:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
     return extracted_chunk, finished
@@ -204,151 +204,6 @@ def test_completion_cohere_stream_bad_key():
 
 # test_completion_cohere_stream_bad_key()
 
-# def test_completion_nlp_cloud():
-#     try:
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(model="dolphin", messages=messages, stream=True)
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         has_finish_reason = False
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finish_reason is False:
-#             raise Exception("Finish reason not in final chunk")
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_nlp_cloud()
-
-# def test_completion_nlp_cloud_bad_key():
-#     try:
-#         api_key = "bad-key"
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(model="dolphin", messages=messages, stream=True, api_key=api_key)
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         has_finish_reason = False
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finish_reason is False:
-#             raise Exception("Finish reason not in final chunk")
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_nlp_cloud_bad_key()
-
-# def test_completion_hf_stream():
-#     try:
-#         litellm.set_verbose = True
-#         # messages = [
-#         #     {
-#         #         "content": "Hello! How are you today?",
-#         #         "role": "user"
-#         #     },
-#         # ]
-#         # response = completion(
-#         #     model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000
-#         # )
-#         # complete_response = ""
-#         # # Add any assertions here to check the response
-#         # for idx, chunk in enumerate(response):
-#         #     chunk, finished = streaming_format_tests(idx, chunk)
-#         #     if finished:
-#         #         break
-#         #     complete_response += chunk
-#         # if complete_response.strip() == "": 
-#         #     raise Exception("Empty response received")
-#         # completion_response_1 = complete_response
-#         messages = [
-#             {
-#                 "content": "Hello! How are you today?",
-#                 "role": "user"
-#             },
-#             {
-#                 "content": "I'm doing well, thank you for asking! I'm excited to be here and help you with any questions or concerns you may have. What can I assist you with today?",
-#                 "role": "assistant"
-#             },
-#             {
-#                 "content": "What is the price of crude oil?",
-#                 "role": "user"
-#             },
-#         ]
-#         response = completion(
-#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000, n=1
-#         )
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         # print(f"completion_response_1: {completion_response_1}")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_hf_stream()
-
-# def test_completion_hf_stream_bad_key():
-#     try:
-#         api_key = "bad-key"
-#         messages = [
-#             {
-#                 "content": "Hello! How are you today?",
-#                 "role": "user"
-#             },
-#         ]
-#         response = completion(
-#             model="huggingface/meta-llama/Llama-2-7b-chat-hf", messages=messages, api_base="https://a8l9e3ucxinyl3oj.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000, api_key=api_key
-#         )
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_hf_stream_bad_key()
-
 def test_completion_azure_stream():
     try:
         litellm.set_verbose = True
@@ -405,6 +260,7 @@ def test_completion_claude_stream():
 
 def test_completion_palm_stream():
     try:
+        litellm.set_verbose=False
         print("Streaming palm response")
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -421,7 +277,8 @@ def test_completion_palm_stream():
         complete_response = ""
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
-            print(chunk.choices[0].delta)
+            print(chunk)
+            # print(chunk.choices[0].delta)
             chunk, finished = streaming_format_tests(idx, chunk)
             if finished:
                 break
@@ -968,8 +825,17 @@ def test_completion_openai_with_functions():
         }
     ]
     try:
+        litellm.set_verbose=False
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True,
+            model="gpt-3.5-turbo-1106", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what's the weather in SF"
+                }
+            ], 
+            functions=function1, 
+            stream=True,
         )
         # Add any assertions here to check the response
         print(response)
@@ -981,7 +847,7 @@ def test_completion_openai_with_functions():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_openai_with_functions()
 #### Test Async streaming ####
 
 # # test on ai21 completion call
