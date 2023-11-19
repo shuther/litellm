@@ -171,10 +171,8 @@ class Message(OpenAIObject):
 class Delta(OpenAIObject):
     def __init__(self, content=None, role=None, **params):
         super(Delta, self).__init__(**params)
-        if content is not None:
-            self.content = content
-        if role:
-            self.role = role
+        self.content = content
+        self.role = role
     
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -3693,7 +3691,7 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
-                elif "403 Permission denied" in error_str: 
+                elif "403" in error_str: 
                     exception_mapping_worked = True
                     raise AuthenticationError(
                         message=f"VertexAIException - {error_str}", 
@@ -4604,17 +4602,28 @@ class CustomStreamWrapper:
     
     def handle_openai_chat_completion_chunk(self, chunk): 
         try: 
+            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
             str_line = chunk
             text = "" 
             is_finished = False
             finish_reason = None
+            original_chunk = None # this is used for function/tool calling
             if len(str_line.choices) > 0: 
                 if str_line.choices[0].delta.content is not None:
                     text = str_line.choices[0].delta.content
+                else: # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
+                    original_chunk = str_line
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
-            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+
+
+            return {
+                "text": text, 
+                "is_finished": is_finished, 
+                "finish_reason": finish_reason,
+                "original_chunk": str_line
+            }
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -4715,6 +4724,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         model_response.choices[0].finish_reason = None
+        response_obj = None
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -4866,6 +4876,21 @@ class CustomStreamWrapper:
                     return model_response
                 else: 
                     return 
+            elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
+                # enter this branch when no content has been passed in response
+                original_chunk = response_obj.get("original_chunk", None)
+                model_response.id = original_chunk.id
+                try:
+                    delta = dict(original_chunk.choices[0].delta)
+                    model_response.choices[0].delta = Delta(**delta)
+                except:
+                    model_response.choices[0].delta = Delta()
+                model_response.system_fingerprint = original_chunk.system_fingerprint
+                if self.sent_first_chunk == False:
+                    model_response.choices[0].delta["role"] = "assistant"
+                    self.sent_first_chunk = True
+                threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
+                return model_response
             elif model_response.choices[0].finish_reason:
                 model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
                 # LOGGING

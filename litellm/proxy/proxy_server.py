@@ -7,6 +7,13 @@ from typing import Optional
 
 import requests
 import yaml
+import sys, os, platform, time, copy, re, asyncio
+import threading, ast
+import shutil, random, traceback, requests
+from datetime import datetime, timedelta
+from typing import Optional
+import secrets, subprocess
+import prisma
 
 messages: list = []
 sys.path.insert(
@@ -22,7 +29,6 @@ try:
     import backoff
     import PyYAML
 except ImportError:
-    import subprocess
     import sys
 
     subprocess.check_call(
@@ -141,6 +147,7 @@ server_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key = None
+prisma_client = None
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug
@@ -159,21 +166,40 @@ def usage_telemetry(
         ).start()
 
 async def user_api_key_auth(request: Request):
-    global master_key
+    global master_key, prisma_client
     if master_key is None:
         return
     try:
         api_key = await oauth2_scheme(request=request)
         if api_key == master_key:
             return
-    except:
-        pass
+        if prisma_client:
+            valid_token = await prisma_client.litellm_verificationtoken.find_first(
+                where={
+                    "token": api_key,
+                    "expires": {"gte": datetime.utcnow()}  # Check if the token is not expired
+                }
+            )
+            if valid_token:
+                if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
+                    return
+                else:
+                    data = await request.json()
+                    model = data.get("model", None)
+                    if model and model not in valid_token.models:
+                        raise Exception(f"Token not allowed to access model")
+                return
+            else:
+                raise Exception(f"Invalid token")
+    except Exception as e:
+        print(f"An exception occurred - {e}")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={"error": "invalid user key"},
     )
 
 def add_keys_to_config(key, value):
+    #### DEPRECATED #### - this uses the older .toml config approach, which has been deprecated for config.yaml
     # Check if file exists
     if os.path.exists(user_config_path):
         # Load existing file
@@ -192,6 +218,7 @@ def add_keys_to_config(key, value):
 
 
 def save_params_to_config(data: dict):
+    #### DEPRECATED #### - this uses the older .toml config approach, which has been deprecated for config.yaml
     # Check if file exists
     if os.path.exists(user_config_path):
         # Load existing file
@@ -223,6 +250,18 @@ def save_params_to_config(data: dict):
     with open(user_config_path, "wb") as f:
         tomli_w.dump(config, f)
 
+def prisma_setup(database_url: Optional[str]):
+    global prisma_client
+    if database_url:
+        import os
+        os.environ["DATABASE_URL"] = database_url
+        subprocess.run(['pip', 'install', 'prisma'])
+        subprocess.run(['python3', '-m', 'pip', 'install', 'prisma'])
+        subprocess.run(['prisma', 'db', 'push'])
+        # Now you can import the Prisma Client
+        from prisma import Client
+        prisma_client = Client()
+
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     global master_key
@@ -240,10 +279,21 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if user_debug:
        print(f"Loaded config YAML:\n{json.dumps(config, indent=2)}")
 
+    ## ENVIRONMENT VARIABLES
+    environment_variables = config.get('environment_variables', None)
+    if environment_variables:
+        for key, value in environment_variables.items():
+            os.environ[key] = value
+
     ## GENERAL SERVER SETTINGS (e.g. master key,..)
     general_settings = config.get("general_settings", None)
     if general_settings:
+        ### MASTER KEY ###
         master_key = general_settings.get("master_key", None)
+        ### CONNECT TO DATABASE ###
+        database_url = general_settings.get("database_url", None)
+        prisma_setup(database_url=database_url)
+
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
@@ -267,6 +317,50 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             os.environ[key] = str(value)
 
     return router, model_list, server_settings
+
+async def generate_key_helper_fn(duration_str: str, models: Optional[list]):
+    token = f"sk-{secrets.token_urlsafe(16)}"
+    def _duration_in_seconds(duration: str):
+        match = re.match(r"(\d+)([smhd]?)", duration)
+        if not match:
+            raise ValueError("Invalid duration format")
+
+        value, unit = match.groups()
+        value = int(value)
+
+        if unit == "s":
+            return value
+        elif unit == "m":
+            return value * 60
+        elif unit == "h":
+            return value * 3600
+        elif unit == "d":
+            return value * 86400
+        else:
+            raise ValueError("Unsupported duration unit")
+
+    duration = _duration_in_seconds(duration=duration_str)
+    expires = datetime.utcnow() + timedelta(seconds=duration)
+    try:
+        db = prisma_client
+        # Create a new verification token (you may want to enhance this logic based on your needs)
+        verification_token_data = {
+            "token": token,
+            "expires": expires,
+            "models": models
+        }
+        new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
+           {**verification_token_data} # type: ignore
+        )
+        print(f"new_verification_token: {new_verification_token}")
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return {"token": new_verification_token.token, "expires": new_verification_token.expires}
+
+async def generate_key_cli_task(duration_str):
+    task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
+    await task
 
 def load_config():
     #### DEPRECATED #### 
@@ -389,7 +483,7 @@ def initialize(
     add_function_to_prompt,
     headers,
     save,
-    config
+    config,
 ):
     global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, server_settings
     generate_feedback_box()
@@ -484,13 +578,21 @@ def litellm_completion(*args, **kwargs):
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
 
-
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
+    global prisma_client
     import json
     worker_config = json.loads(os.getenv("WORKER_CONFIG"))
     initialize(**worker_config)
-    # print(f"\033[32mWorker Initialized\033[0m\n")
+    if prisma_client:
+        await prisma_client.connect()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global prisma_client
+    if prisma_client:
+        print("Disconnecting from Prisma")
+        await prisma_client.disconnect()
 
 #### API ENDPOINTS ####
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)])
@@ -597,29 +699,21 @@ async def chat_completion(request: Request, model: Optional[str] = None):
             detail=error_msg
         )
 
+@router.post("/key/generate", dependencies=[Depends(user_api_key_auth)])
+async def generate_key_fn(request: Request):
+    data = await request.json()
 
-@router.post("/router/chat/completions", dependencies=[Depends(user_api_key_auth)])
-async def router_completion(request: Request):
-    try: 
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except: 
-            data = json.loads(body_str)
-        return {"data": data}
-    except Exception as e: 
-        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
-        error_traceback = traceback.format_exc()
-        error_msg = f"{str(e)}\n\n{error_traceback}"
-        try:
-            status = e.status_code # type: ignore
-        except:
-            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+    duration_str = data.get("duration", "1h")  # Default to 1 hour if duration is not provided
+    models = data.get("models", []) # Default to an empty list (meaning allow token to call all models)
+    if isinstance(models, list):
+        response = await generate_key_helper_fn(duration_str=duration_str, models=models)
+        return {"key": response["token"], "expires": response["expires"]}
+    else:
         raise HTTPException(
-            status_code=status,
-            detail=error_msg
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "models param must be a list"},
         )
+
 
 @router.get("/ollama_logs", dependencies=[Depends(user_api_key_auth)])
 async def retrieve_server_log(request: Request):
