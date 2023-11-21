@@ -39,6 +39,7 @@ logs/
 
 #Other
 .idea
+legacy/
 
 #Ignore ISO images
 *.iso

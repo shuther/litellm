@@ -19,3 +19,4 @@ router_config.yaml
 **/litellm.secrets.toml
 .github/workflows/test/
 litellm/proxy/_secret_config.yaml
+legacy/
