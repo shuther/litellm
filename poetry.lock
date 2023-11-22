@@ -146,13 +146,13 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "0.7.0"
+version = "0.7.3"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "anthropic-0.7.0-py3-none-any.whl", hash = "sha256:b8eb8249457ceafe1a5ef4247480ac9a6c55cefc44382e7d5d4f3219c74e79f3"},
-    {file = "anthropic-0.7.0.tar.gz", hash = "sha256:5646a18463580b3a1b7130e969ec19fe40418632f4a5e673edd8c90c9b44a5a2"},
+    {file = "anthropic-0.7.3-py3-none-any.whl", hash = "sha256:0a3abed5478914c51907ef3f59024e878e7e9cae3b11da6f0f0882766947f5ac"},
+    {file = "anthropic-0.7.3.tar.gz", hash = "sha256:7d5bbf300a151a514b3a1dff51916ea0295ad0403c239aef45a31b12bfb37ada"},
 ]
 
 [package.dependencies]
