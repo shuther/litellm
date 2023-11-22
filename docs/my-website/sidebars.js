@@ -38,6 +38,7 @@ const sidebars = {
         "completion/model_alias", 
         "completion/batching",
         "completion/mock_requests",
+        "completion/reliable_completions",
       ],
     },
     {
@@ -85,8 +86,8 @@ const sidebars = {
       ]
     },
     "simple_proxy",
-    "budget_manager",
     "routing",
+    "rules",
     "set_keys",
     "completion/token_usage",
     {
@@ -157,6 +158,7 @@ const sidebars = {
       label: 'Extras',
       items: [
         'extras/contributing',
+        "budget_manager",
         "proxy_server",
         {
           type: "category",

@@ -7,12 +7,12 @@ import httpx
 import json5
 import requests
 
-from litellm.caching import Cache
-
 input_callback: list[Union[str, Callable]] = []
 success_callback: list[Union[str, Callable]] = []
 failure_callback: list[Union[str, Callable]] = []
 callbacks: list[Callable] = []
+pre_call_rules: list[Callable] = []
+post_call_rules: list[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -299,7 +299,9 @@ from .exceptions import (
     ContextWindowExceededError,
     BudgetExceededError,
     APIError,
-    Timeout
+    Timeout,
+    APIConnectionError,
+    APIResponseValidationError
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

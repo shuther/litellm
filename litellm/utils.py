@@ -194,10 +194,7 @@ class Delta(OpenAIObject):
 class Choices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = "stop"
+        self.finish_reason = map_finish_reason(finish_reason) # set finish_reason for all responses
         self.index = index
         if message is None:
             self.message = Message(content=None)
@@ -510,7 +507,8 @@ class Logging:
             "messages": self.messages,
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
-            "start_time": self.start_time
+            "start_time": self.start_time,
+            "stream": self.stream
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -1066,10 +1064,48 @@ def exception_logging(
         pass
 
 
+####### RULES ###################
+
+class Rules: 
+    """
+    Fail calls based on the input or llm api output
+
+    Example usage: 
+    import litellm 
+    def my_custom_rule(input): # receives the model response 
+	    if "i don't think i can answer" in input: # trigger fallback if the model refuses to answer 
+		    return False 
+	    return True 
+    
+    litellm.post_call_rules = [my_custom_rule] # have these be functions that can be called to fail a call
+
+    response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", 
+	"content": "Hey, how's it going?"}], fallbacks=["openrouter/mythomax"])
+    """
+    def __init__(self) -> None:
+        pass
+
+    def pre_call_rules(self, input: str, model: str): 
+        for rule in litellm.pre_call_rules: 
+            if callable(rule): 
+                decision = rule(input)
+                if decision is False:
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
+        return True 
+
+    def post_call_rules(self, input: str, model: str): 
+        for rule in litellm.post_call_rules: 
+            if callable(rule): 
+                decision = rule(input)
+                if decision is False:
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
+        return True 
+
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
     global liteDebuggerClient, get_all_keys
+    rules_obj = Rules()
     def function_setup(
         start_time, *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -1126,18 +1162,28 @@ def client(original_function):
                     messages = args[1] 
                 elif kwargs.get("messages", None):
                     messages = kwargs["messages"]
-                elif kwargs.get("prompt", None):
-                    messages = kwargs["prompt"]
+                ### PRE-CALL RULES ### 
+                rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type, start_time=start_time)
             return logging_obj
-        except Exception as e:  # DO NOT BLOCK running the function because of this
+        except Exception as e: 
             import logging
             logging.debug(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
             raise e
     
+    def post_call_processing(original_response, model):
+        try: 
+            call_type = original_function.__name__
+            if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value:
+                model_response = original_response['choices'][0]['message']['content']
+                ### POST-CALL RULES ### 
+                rules_obj.post_call_rules(input=model_response, model=model)
+        except Exception as e: 
+            raise e
+
     def crash_reporting(*args, **kwargs):
         if litellm.telemetry:
             try:
@@ -1214,6 +1260,9 @@ def client(original_function):
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
                 return result
+            
+            ### POST-CALL RULES ### 
+            post_call_processing(original_response=result, model=model)
 
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
@@ -1319,6 +1368,10 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks)
                 else: 
                     return result
+            
+            ### POST-CALL RULES ### 
+            post_call_processing(original_response=result, model=model)
+
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
@@ -1326,6 +1379,8 @@ def client(original_function):
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
+            if isinstance(result, ModelResponse):
+                result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e: 
             call_type = original_function.__name__
@@ -1767,6 +1822,7 @@ def get_optional_params(  # use the openai defaults
     seed=None,
     tools=None,
     tool_choice=None,
+    max_retries=None,
     **kwargs
 ):
     # retrieve all parameters passed to the function
@@ -1792,7 +1848,8 @@ def get_optional_params(  # use the openai defaults
         "response_format": None,
         "seed": None,
         "tools": None,
-        "tool_choice": None
+        "tool_choice": None,
+        "max_retries": None,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
@@ -2186,7 +2243,7 @@ def get_optional_params(  # use the openai defaults
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
@@ -2199,6 +2256,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
     try:
         dynamic_api_key = None
         # check if llm provider provided
+        
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
 
@@ -3087,9 +3145,11 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
+            if "usage" in response_object and response_object["usage"] is not None:
+                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
+
             if "id" in response_object: 
                 model_response_object.id = response_object["id"]
             
@@ -3279,7 +3339,7 @@ def register_prompt_template(model: str, roles: dict, initial_prompt_value: str 
     }
     return litellm.custom_prompt_dict
 
-####### [BETA] HOSTED PRODUCT ################ - https://docs.litellm.ai/docs/debugging/hosted_debugging
+####### DEPRECATED ################ 
 
 
 def get_all_keys(llm_provider=None):

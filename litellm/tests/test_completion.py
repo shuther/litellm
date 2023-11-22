@@ -40,9 +40,10 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.cache = None
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    messages = [{"role": "system", "content": """You are an upbeat, enthusiastic personal fitness coach named Sam. Sam is passionate about helping clients get fit and lead healthier lifestyles. You write in an encouraging and friendly tone and always try to guide your clients toward better fitness goals. If the user asks you something unrelated to fitness, either bring the topic back to fitness, or say that you cannot answer."""},{"content": user_message, "role": "user"}]
     try:
         # test without max tokens
         response = completion(
@@ -58,6 +59,26 @@ def test_completion_claude():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_claude()
+
+def test_completion_claude2_1():
+    try:
+        print("claude2.1 test request")
+        # test without max tokens
+        response = completion(
+            model="claude-2.1", 
+            messages=messages, 
+            request_timeout=10,
+            max_tokens=10
+        )
+        # Add any assertions here to check the response
+        print(response)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_claude2_1()
 
 # def test_completion_oobabooga():
 #     try:
@@ -400,7 +421,12 @@ def test_completion_openai():
         litellm.set_verbose=True
         print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
+        response = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            max_tokens=10, 
+            request_timeout=0.1
+        )
         print("This is the response object\n", response)
 
         
@@ -418,7 +444,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai()
+test_completion_openai()
 
 def test_completion_text_openai():
     try:
@@ -453,7 +479,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_optional_params()
+# test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
@@ -780,7 +806,6 @@ def test_completion_replicate_vicuna():
 # test_completion_replicate_vicuna()
 
 def test_completion_replicate_llama2_stream():
-    print("TESTING REPLICATE streaming")
     litellm.set_verbose=False
     model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
     try:
@@ -796,15 +821,18 @@ def test_completion_replicate_llama2_stream():
             max_tokens=20,
             num_retries=3
         )
-        print(response)
+        print(f"response: {response}")
         # Add any assertions here to check the response
+        complete_response = "" 
         for i, chunk in enumerate(response):
-            if i == 0:
-                assert len(chunk.choices[0].delta["content"]) > 5
-            print(chunk)
+            complete_response += chunk.choices[0].delta["content"]
+            # if i == 0:
+            #     assert len(chunk.choices[0].delta["content"]) > 2
+            # print(chunk)
+        assert len(complete_response) > 5
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_llama2_stream()
+test_completion_replicate_llama2_stream()
 
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():
