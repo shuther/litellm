@@ -13,7 +13,6 @@ import shutil, random, traceback, requests
 from datetime import datetime, timedelta
 from typing import Optional
 import secrets, subprocess
-import prisma
 
 messages: list = []
 sys.path.insert(
@@ -27,7 +26,8 @@ try:
     import appdirs
     import tomli_w
     import backoff
-    import PyYAML
+    import yaml
+    import rq
 except ImportError:
     import sys
 
@@ -43,7 +43,8 @@ except ImportError:
             "appdirs",
             "tomli-w",
             "backoff",
-            "pyyaml",
+            "pyyaml", #TODO should it be pyyaml or yaml?
+            "rq"
         ]
     )
     import uvicorn
@@ -107,6 +108,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 import json
 import logging
+# from litellm.proxy.queue import start_rq_worker_in_background
 
 app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
@@ -148,12 +150,16 @@ log_file = "api_log.json"
 worker_config = None
 master_key = None
 prisma_client = None
+config_cache = {}
+### REDIS QUEUE ###
+async_result = None
+celery_app_conn = None
+celery_fn = None # Redis Queue for handling requests
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug
     if user_debug:
         print(print_statement)
-
 
 def usage_telemetry(
     feature: str,
@@ -166,13 +172,17 @@ def usage_telemetry(
         ).start()
 
 async def user_api_key_auth(request: Request):
-    global master_key, prisma_client
+    global master_key, prisma_client, config_cache, llm_model_list
     if master_key is None:
         return
     try:
         api_key = await oauth2_scheme(request=request)
         if api_key == master_key:
             return
+        if api_key in config_cache:
+            llm_model_list =  config_cache[api_key].get("model_list", [])
+            return
+
         if prisma_client:
             valid_token = await prisma_client.litellm_verificationtoken.find_first(
                 where={
@@ -181,11 +191,20 @@ async def user_api_key_auth(request: Request):
                 }
             )
             if valid_token:
+                litellm.model_alias_map = valid_token.aliases
+                config = valid_token.config
+                if config != {}:
+                    model_list = config.get("model_list", [])
+                    llm_model_list =  model_list
+                    config_cache[api_key] = config
+                    print("\n new llm router model list", llm_model_list)
                 if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
                     return
                 else:
                     data = await request.json()
                     model = data.get("model", None)
+                    if model in litellm.model_alias_map:
+                        model = litellm.model_alias_map[model]
                     if model and model not in valid_token.models:
                         raise Exception(f"Token not allowed to access model")
                 return
@@ -198,70 +217,38 @@ async def user_api_key_auth(request: Request):
         detail={"error": "invalid user key"},
     )
 
-def add_keys_to_config(key, value):
-    #### DEPRECATED #### - this uses the older .toml config approach, which has been deprecated for config.yaml
-    # Check if file exists
-    if os.path.exists(user_config_path):
-        # Load existing file
-        with open(user_config_path, "rb") as f:
-            config = tomllib.load(f)
-    else:
-        # File doesn't exist, create empty config
-        config = {}
-
-    # Add new key
-    config.setdefault("keys", {})[key] = value
-
-    # Write config to file
-    with open(user_config_path, "wb") as f:
-        tomli_w.dump(config, f)
-
-
-def save_params_to_config(data: dict):
-    #### DEPRECATED #### - this uses the older .toml config approach, which has been deprecated for config.yaml
-    # Check if file exists
-    if os.path.exists(user_config_path):
-        # Load existing file
-        with open(user_config_path, "rb") as f:
-            config = tomllib.load(f)
-    else:
-        # File doesn't exist, create empty config
-        config = {}
-
-    config.setdefault("general", {})
-
-    ## general config
-    general_settings = data["general"]
-
-    for key, value in general_settings.items():
-        config["general"][key] = value
-
-    ## model-specific config
-    config.setdefault("model", {})
-    config["model"].setdefault(user_model, {})
-
-    user_model_config = data[user_model]
-    model_key = model_key = user_model_config.pop("alias", user_model)
-    config["model"].setdefault(model_key, {})
-    for key, value in user_model_config.items():
-        config["model"][model_key][key] = value
-
-    # Write config to file
-    with open(user_config_path, "wb") as f:
-        tomli_w.dump(config, f)
-
 def prisma_setup(database_url: Optional[str]):
     global prisma_client
     if database_url:
+        try:
         import os
-        os.environ["DATABASE_URL"] = database_url
-        subprocess.run(['pip', 'install', 'prisma'])
-        subprocess.run(['python3', '-m', 'pip', 'install', 'prisma'])
-        subprocess.run(['prisma', 'db', 'push'])
-        # Now you can import the Prisma Client
-        from prisma import Client
-        prisma_client = Client()
+            print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
+            os.environ["DATABASE_URL"] = database_url
+            subprocess.run(['prisma', 'generate'])
+            subprocess.run(['prisma', 'db', 'push', '--accept-data-loss']) # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            # Now you can import the Prisma Client
+            from prisma import Client
+            prisma_client = Client()
+        except Exception as e:
+            print("Error when initializing prisma, Ensure you run pip install prisma", e)
 
+def celery_setup(use_queue: bool):
+    global celery_fn, celery_app_conn, async_result
+    print(f"value of use_queue: {use_queue}")
+    if use_queue:
+        from litellm.proxy.queue.celery_worker import start_worker
+        from litellm.proxy.queue.celery_app import celery_app, process_job
+        from celery.result import AsyncResult
+        start_worker(os.getcwd())
+        celery_fn = process_job
+        async_result = AsyncResult
+        celery_app_conn = celery_app
+
+def run_ollama_serve():
+    command = ['ollama', 'serve']
+
+    with open(os.devnull, 'w') as devnull:
+        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     global master_key
@@ -293,14 +280,15 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         prisma_setup(database_url=database_url)
-
+        ### START REDIS QUEUE ###
+        use_queue = general_settings.get("use_queue", False)
+        celery_setup(use_queue=use_queue)
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings: 
         for key, value in litellm_settings.items(): 
             setattr(litellm, key, value)
-
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
@@ -308,7 +296,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
-        print()
+            litellm_model_name = model["litellm_params"]["model"]
+            # print(f"litellm_model_name: {litellm_model_name}")
+            if "ollama" in litellm_model_name:
+                run_ollama_serve()
 
     ## ENVIRONMENT VARIABLES
     environment_variables = config.get("environment_variables", None)
@@ -318,7 +309,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
     return router, model_list, server_settings
 
-async def generate_key_helper_fn(duration_str: str, models: Optional[list]):
+async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict):
     token = f"sk-{secrets.token_urlsafe(16)}"
     def _duration_in_seconds(duration: str):
         match = re.match(r"(\d+)([smhd]?)", duration)
@@ -341,18 +332,22 @@ async def generate_key_helper_fn(duration_str: str, models: Optional[list]):
 
     duration = _duration_in_seconds(duration=duration_str)
     expires = datetime.utcnow() + timedelta(seconds=duration)
+    aliases_json = json.dumps(aliases)
+    config_json = json.dumps(config)
     try:
         db = prisma_client
         # Create a new verification token (you may want to enhance this logic based on your needs)
         verification_token_data = {
             "token": token,
             "expires": expires,
-            "models": models
+            "models": models,
+            "aliases": aliases_json,
+            "config": config_json
         }
+        print(f"verification_token_data: {verification_token_data}")
         new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
            {**verification_token_data} # type: ignore
         )
-        print(f"new_verification_token: {new_verification_token}")
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -362,107 +357,6 @@ async def generate_key_cli_task(duration_str):
     task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
     await task
 
-def load_config():
-    #### DEPRECATED #### 
-    try:
-        global user_config, user_api_base, user_max_tokens, user_temperature, user_model, local_logging, llm_model_list, llm_router, server_settings
-        
-        # Get the file extension
-        file_extension = os.path.splitext(user_config_path)[1]
-        if file_extension.lower() == ".toml":
-            # As the .env file is typically much simpler in structure, we use load_dotenv here directly
-            with open(user_config_path, "rb") as f:
-                user_config = tomllib.load(f)
-
-            ## load keys
-            if "keys" in user_config:
-                for key in user_config["keys"]:
-                    os.environ[key] = user_config["keys"][
-                        key
-                    ]  # litellm can read keys from the environment
-            ## settings
-            if "general" in user_config:
-                litellm.add_function_to_prompt = user_config["general"].get(
-                    "add_function_to_prompt", True
-                )  # by default add function to prompt if unsupported by provider
-                litellm.drop_params = user_config["general"].get(
-                    "drop_params", True
-                )  # by default drop params if unsupported by provider
-                litellm.model_fallbacks = user_config["general"].get(
-                    "fallbacks", None
-                )  # fallback models in case initial completion call fails
-                default_model = user_config["general"].get(
-                    "default_model", None
-                )  # route all requests to this model.
-
-                local_logging = user_config["general"].get("local_logging", True)
-
-                if user_model is None:  # `litellm --model <model-name>`` > default_model.
-                    user_model = default_model
-
-            ## load model config - to set this run `litellm --config`
-            model_config = None
-            if "model" in user_config:
-                if user_model in user_config["model"]:
-                    model_config = user_config["model"][user_model]
-                model_list = []
-                for model in user_config["model"]:
-                    if "model_list" in user_config["model"][model]:
-                        model_list.extend(user_config["model"][model]["model_list"])
-
-            print_verbose(f"user_config: {user_config}")
-            print_verbose(f"model_config: {model_config}")
-            print_verbose(f"user_model: {user_model}")
-            if model_config is None:
-                return
-
-            user_max_tokens = model_config.get("max_tokens", None)
-            user_temperature = model_config.get("temperature", None)
-            user_api_base = model_config.get("api_base", None)
-
-            ## custom prompt template
-            if "prompt_template" in model_config:
-                model_prompt_template = model_config["prompt_template"]
-                if (
-                    len(model_prompt_template.keys()) > 0
-                ):  # if user has initialized this at all
-                    litellm.register_prompt_template(
-                        model=user_model,
-                        initial_prompt_value=model_prompt_template.get(
-                            "MODEL_PRE_PROMPT", ""
-                        ),
-                        roles={
-                            "system": {
-                                "pre_message": model_prompt_template.get(
-                                    "MODEL_SYSTEM_MESSAGE_START_TOKEN", ""
-                                ),
-                                "post_message": model_prompt_template.get(
-                                    "MODEL_SYSTEM_MESSAGE_END_TOKEN", ""
-                                ),
-                            },
-                            "user": {
-                                "pre_message": model_prompt_template.get(
-                                    "MODEL_USER_MESSAGE_START_TOKEN", ""
-                                ),
-                                "post_message": model_prompt_template.get(
-                                    "MODEL_USER_MESSAGE_END_TOKEN", ""
-                                ),
-                            },
-                            "assistant": {
-                                "pre_message": model_prompt_template.get(
-                                    "MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""
-                                ),
-                                "post_message": model_prompt_template.get(
-                                    "MODEL_ASSISTANT_MESSAGE_END_TOKEN", ""
-                                ),
-                            },
-                        },
-                        final_prompt_value=model_prompt_template.get(
-                            "MODEL_POST_PROMPT", ""
-                        ),
-                    )
-    except:
-        pass
 
 def save_worker_config(**data): 
     import json
@@ -484,6 +378,7 @@ def initialize(
     headers,
     save,
     config,
+    use_queue
 ):
     global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, server_settings
     generate_feedback_box()
@@ -524,13 +419,16 @@ def initialize(
         dynamic_config["general"]["max_budget"] = max_budget
     if debug==True:  # litellm-specific param
         litellm.set_verbose = True
-    if experimental: 
+    if use_queue:
+        celery_setup(use_queue=use_queue)
+    if experimental:
         pass
     if save:
-        save_params_to_config(dynamic_config)
-        with open(user_config_path) as f:
-            print(f.read())
-        print("\033[1;32mDone successfully\033[0m")
+        pass
+        # save_params_to_config(dynamic_config)
+        # with open(user_config_path) as f:
+        #     print(f.read())
+        # print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
 #    logging.debug(dynamic_config)
@@ -603,7 +501,8 @@ def model_list():
     if server_settings.get("infer_model_from_keys", False):
         all_models = litellm.utils.get_valid_models()
     if llm_model_list: 
-        all_models += llm_model_list
+        print(f"llm model list: {llm_model_list}")
+        all_models += [m["model_name"] for m in llm_model_list]
     if user_model is not None:
         all_models += user_model
     ### CHECK OLLAMA MODELS ### 
@@ -613,7 +512,7 @@ def model_list():
         ollama_models = [m["name"].replace(":latest", "") for m in models]
         all_models.extend(ollama_models)
     except Exception as e: 
-        traceback.print_exc()
+        pass
     return dict(
         data=[
             {
@@ -657,7 +556,7 @@ async def completion(request: Request, model: Optional[str] = None):
         try:
             status = e.status_code  # type: ignore
         except:
-            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status = 500
         raise HTTPException(
             status_code=status,
             detail=error_msg
@@ -693,7 +592,7 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         try:
             status = e.status_code # type: ignore
         except:
-            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status = 500
         raise HTTPException(
             status_code=status,
             detail=error_msg
@@ -705,14 +604,48 @@ async def generate_key_fn(request: Request):
 
     duration_str = data.get("duration", "1h")  # Default to 1 hour if duration is not provided
     models = data.get("models", []) # Default to an empty list (meaning allow token to call all models)
+    aliases = data.get("aliases", {}) # Default to an empty dict (no alias mappings, on top of anything in the config.yaml model_list)
+    config = data.get("config", {})
     if isinstance(models, list):
-        response = await generate_key_helper_fn(duration_str=duration_str, models=models)
+        response = await generate_key_helper_fn(duration_str=duration_str, models=models, aliases=aliases, config=config)
         return {"key": response["token"], "expires": response["expires"]}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "models param must be a list"},
         )
+
+@router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
+async def async_queue_request(request: Request):
+    global celery_fn, llm_model_list
+    body = await request.body()
+    body_str = body.decode()
+    try:
+        data = ast.literal_eval(body_str)
+    except:
+        data = json.loads(body_str)
+    data["model"] = (
+        server_settings.get("completion_model", None) # server default
+        or user_model # model name passed via cli args
+        or data["model"] # default passed in http request
+    )
+    data["llm_model_list"] = llm_model_list
+    print(f"data: {data}")
+    job = celery_fn.apply_async(kwargs=data)
+    return {"id": job.id, "url": f"/queue/response/{job.id}", "eta": 5, "status": "queued"}
+    pass
+
+@router.get("/queue/response/{task_id}", dependencies=[Depends(user_api_key_auth)])
+async def async_queue_response(request: Request, task_id: str):
+    global celery_app_conn, async_result
+    try:
+        job = async_result(task_id, app=celery_app_conn)
+        if job.ready():
+            return {"status": "finished", "result": job.result}
+        else:
+            return {'status': 'queued'}
+    except Exception as e:
+        return {"status": "finished", "result": str(e)}
 
 
 @router.get("/ollama_logs", dependencies=[Depends(user_api_key_auth)])

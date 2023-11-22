@@ -241,7 +241,7 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
             return response
         
         model_response["choices"][0]["message"]["content"] = mock_response
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         return model_response
 
@@ -344,20 +344,20 @@ def completion(
     eos_token = kwargs.get("eos_token", None)
     acompletion = kwargs.get("acompletion", False)
     ######## end of unpacking kwargs ###########
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "max_retries"]
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
 
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
     if timeout is None:
-        timeout = 600 # set timeout for 10 minutes by default
+        timeout = kwargs.get("request_timeout", None) or 600 # set timeout for 10 minutes by default
     timeout = float(timeout)
     try:
-        if base_url:
+        if base_url is not None:
             api_base = base_url
-        if max_retries:
+        if max_retries is not None: # openai allows openai.OpenAI(max_retries=3)
             num_retries = max_retries
         logging = litellm_logging_obj
         fallbacks = (
@@ -370,11 +370,9 @@ def completion(
             deployments = [m["litellm_params"] for m in model_list if m["model_name"] == model]
             return batch_completion_models(deployments=deployments, **args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
-            args["model_alias_map"] = litellm.model_alias_map
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
-
         model_response = ModelResponse()
 
         if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
@@ -401,7 +399,7 @@ def completion(
             api_base = "https://proxy.litellm.ai"
             custom_llm_provider = "openai" 
             api_key = model_api_key
-        
+
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
                 functions=functions,
@@ -423,6 +421,7 @@ def completion(
                 seed=seed,
                 tools=tools,
                 tool_choice=tool_choice,
+                max_retries=max_retries,
                 **non_default_params
             )
         
@@ -568,7 +567,8 @@ def completion(
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
-                    timeout=timeout
+                    timeout=timeout,
+                    custom_prompt_dict=custom_prompt_dict
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -1257,7 +1257,7 @@ def completion(
             
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = response_string
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + model
             prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
@@ -1383,7 +1383,7 @@ def completion(
             string_response = response_json['data'][0]['output'][0]
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = string_response
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = model
             response = model_response
         else:
