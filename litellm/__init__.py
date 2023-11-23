@@ -6,6 +6,7 @@ from typing import Callable, Optional, Dict, Union
 import httpx
 import json5
 import requests
+from litellm.caching import Cache
 
 input_callback: list[Union[str, Callable]] = []
 success_callback: list[Union[str, Callable]] = []
