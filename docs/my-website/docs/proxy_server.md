@@ -38,6 +38,7 @@ print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "cont
 ```
 
 #### Other supported models:
+<!--suppress HtmlUnknownTag -->
 <Tabs>
 <TabItem value="vllm-local" label="VLLM">
 Assuming you're running vllm locally
