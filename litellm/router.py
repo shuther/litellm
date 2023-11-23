@@ -7,17 +7,18 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-from datetime import datetime
-import logging
-import os
-import sys
-from typing import Dict, List, Optional, Union, Literal
-import random, threading, time
-import logging
-import openai
 import asyncio
 import inspect
-from openai import AsyncOpenAI
+import logging
+import os
+import random
+import sys
+import threading
+import time
+from datetime import datetime
+from typing import Dict, List, Optional, Union, Literal
+
+import openai
 
 sys.path.insert(
     0, os.path.abspath("..")
@@ -61,6 +62,7 @@ class Router:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
             self.deployment_latency_map = {}
+            self.cooldown_deployments: dict = {} # {"gpt-3.5-turbo": time.time() when it failed / needed a cooldown}
             for m in model_list:
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
 
@@ -92,12 +94,17 @@ class Router:
         if cache_responses:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
-        self.cache = litellm.Cache(cache_config) # use Redis for tracking load balancing
+        self.cache = litellm.Cache(**cache_config) # use Redis for tracking load balancing
         ## USAGE TRACKING ##
-        if type(litellm.success_callback) == list:
+        if isinstance(litellm.success_callback, list):
             litellm.success_callback.append(self.deployment_callback)
         else:
             litellm.success_callback = [self.deployment_callback]
+
+        if isinstance(litellm.failure_callback, list):
+            litellm.failure_callback.append(self.deployment_callback_on_failure)
+        else:
+            litellm.failure_callback = [self.deployment_callback_on_failure]
 
     def _start_health_check_thread(self):
         """
@@ -166,6 +173,23 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
+        ## get healthy deployments
+        ### get all deployments
+        ### filter out the deployments currently cooling down
+        healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
+        current_time = time.time()
+        iter = 0
+        deployments_to_remove = []
+        cooldown_deployments = self._get_cooldown_deployments()
+        ### FIND UNHEALTHY DEPLOYMENTS
+        for deployment in healthy_deployments:
+            deployment_name = deployment["litellm_params"]["model"]
+            if deployment_name in cooldown_deployments:
+                deployments_to_remove.append(deployment)
+            iter += 1
+        ### FILTER OUT UNHEALTHY DEPLOYMENTS
+        for deployment in deployments_to_remove:
+            healthy_deployments.remove(deployment)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -178,24 +202,15 @@ class Router:
             else: 
                 raise ValueError("No models available.")
         elif self.routing_strategy == "simple-shuffle": 
-            potential_deployments = []
-            for item in self.model_list:
-                if item["model_name"] == model:
-                    potential_deployments.append(item)
-            item = random.choice(potential_deployments)
+            item = random.choice(healthy_deployments)
             return item or item[0]
         elif self.routing_strategy == "latency-based-routing":
             returned_item = None
             lowest_latency = float('inf')
-            ### get potential deployments
-            potential_deployments = []
-            for item in self.model_list:
-                if item["model_name"] == model:
-                    potential_deployments.append(item)
             ### shuffles with priority for lowest latency
             # items_with_latencies = [('A', 10), ('B', 20), ('C', 30), ('D', 40)]
             items_with_latencies = []
-            for item in potential_deployments:
+            for item in healthy_deployments:
                 items_with_latencies.append((item, self.deployment_latency_map[item["litellm_params"]["model"]]))
             returned_item = self.weighted_shuffle_by_latency(items_with_latencies)
             return returned_item
@@ -239,36 +254,31 @@ class Router:
                 raise e
 
     def function_with_retries(self, *args, **kwargs):
-        try:
-            import tenacity
-        except Exception as e:
-            raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
+        # we'll backoff exponentially with each retry
+        backoff_factor = 1
+        original_exception = kwargs.pop("original_exception")
+        original_function = kwargs.pop("original_function")
+        for current_attempt in range(self.num_retries):
+            self.num_retries -= 1 # decrement the number of retries
+            try:
+                # if the function call is successful, no exception will be raised and we'll break out of the loop
+                response = original_function(*args, **kwargs)
+                return response
 
-        retry_info = {"attempts": 0, "final_result": None}
+            except openai.RateLimitError as e:
+                # on RateLimitError we'll wait for an exponential time before trying again
+                time.sleep(backoff_factor)
 
-        def after_callback(retry_state):
-            retry_info["attempts"] = retry_state.attempt_number
-            retry_info["final_result"] = retry_state.outcome.result()
+                # increase backoff factor for next run
+                backoff_factor *= 2
 
-        if 'model' not in kwargs or 'messages' not in kwargs:
-            raise ValueError("'model' and 'messages' must be included as keyword arguments")
+            except openai.APIError as e:
+                # on APIError we immediately retry without any wait, change this if necessary
+                pass
 
-        try:
-            original_exception = kwargs.pop("original_exception")
-            original_function = kwargs.pop("original_function")
-            if isinstance(original_exception, openai.RateLimitError):
-                retryer = tenacity.Retrying(wait=tenacity.wait_exponential(multiplier=1, max=10),
-                                            stop=tenacity.stop_after_attempt(self.num_retries),
-                                            reraise=True,
-                                            after=after_callback)
-            elif isinstance(original_exception, openai.APIError):
-                retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(self.num_retries),
-                                            reraise=True,
-                                            after=after_callback)
-
-            return retryer(self.acompletion, *args, **kwargs)
-        except Exception as e:
-            raise Exception(f"Error in function_with_retries: {e}\n\nRetry Info: {retry_info}")
+            except Exception as e:
+                # for any other exception types, don't retry
+                raise e
 
     ### COMPLETION + EMBEDDING FUNCTIONS
 
@@ -283,13 +293,13 @@ class Router:
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
         """
         try:
-        # pick the one that is available (lowest TPM/RPM)
-        deployment = self.get_available_deployment(model=model, messages=messages)
-        data = deployment["litellm_params"]
-        for k, v in self.default_litellm_params.items():
-            if k not in data: # prioritize model-specific params > default router params
-                data[k] = v
-        return litellm.completion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
+            # pick the one that is available (lowest TPM/RPM)
+            deployment = self.get_available_deployment(model=model, messages=messages)
+            data = deployment["litellm_params"]
+            for k, v in self.default_litellm_params.items():
+                if k not in data: # prioritize model-specific params > default router params
+                    data[k] = v
+            return litellm.completion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
         except Exception as e:
             if self.num_retries > 0:
                 kwargs["model"] = model
@@ -337,12 +347,12 @@ class Router:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(model=model, messages=messages)
 
-        data = deployment["litellm_params"]
-        for k, v in self.default_litellm_params.items():
-            if k not in data: # prioritize model-specific params > default router params
-                data[k] = v
-        # call via litellm.completion()
-        return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}) # type: ignore
+            data = deployment["litellm_params"]
+            for k, v in self.default_litellm_params.items():
+                if k not in data: # prioritize model-specific params > default router params
+                    data[k] = v
+            # call via litellm.completion()
+            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}) # type: ignore
         except Exception as e:
             if self.num_retries > 0:
                 kwargs["model"] = model
@@ -416,7 +426,48 @@ class Router:
         custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
         if custom_llm_provider:
             model_name = f"{custom_llm_provider}/{model_name}"
-        self.deployment_latency_map[model_name] = float('inf')
+
+        self._set_cooldown_deployments(model_name)
+
+    def _set_cooldown_deployments(self,
+                                  deployment: str):
+        """
+        Add a model to the list of models being cooled down for that minute
+        """
+
+        current_minute = datetime.now().strftime("%H-%M")
+        # get the current cooldown list for that minute
+        cooldown_key = f"{current_minute}:cooldown_models" # group cooldown models by minute to reduce number of redis calls
+        cached_value = self.cache.get_cache(cache_key=cooldown_key)
+
+        # update value
+        try:
+            if deployment in cached_value:
+                pass
+            else:
+                cached_value = cached_value + [deployment]
+                # save updated value
+                self.cache.add_cache(result=cached_value, cache_key=cooldown_key, ttl=60)
+        except:
+            cached_value = [deployment]
+
+            # save updated value
+            self.cache.add_cache(result=cached_value, cache_key=cooldown_key, ttl=60)
+
+    def _get_cooldown_deployments(self):
+        """
+        Get the list of models being cooled down for this minute
+        """
+        current_minute = datetime.now().strftime("%H-%M")
+        # get the current cooldown list for that minute
+        cooldown_key = f"{current_minute}:cooldown_models"
+
+        # ----------------------
+        # Return cooldown models
+        # ----------------------
+        cooldown_models = self.cache.get_cache(cache_key=cooldown_key) or []
+
+        return cooldown_models
 
     def get_usage_based_available_deployment(self,
                                model: str,

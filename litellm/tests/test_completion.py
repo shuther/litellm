@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system path 
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -183,7 +183,7 @@ def test_completion_perplexity_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_perplexity_api()
+test_completion_perplexity_api()
 
 def test_completion_perplexity_api_2():
     try:
@@ -444,7 +444,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai()
+# test_completion_openai()
 
 def test_completion_text_openai():
     try:
@@ -830,6 +830,7 @@ def test_completion_replicate_llama2_stream():
             #     assert len(chunk.choices[0].delta["content"]) > 2
             # print(chunk)
         assert len(complete_response) > 5
+        print(f"complete_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_replicate_llama2_stream()

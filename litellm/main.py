@@ -178,6 +178,10 @@ async def acompletion(*args, **kwargs):
         if (custom_llm_provider == "openai" 
             or custom_llm_provider == "azure" 
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all.
             if kwargs.get("stream", False): 
@@ -517,13 +521,16 @@ def completion(
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                api_base
+                api_base # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -535,7 +542,7 @@ def completion(
             )
             # set API KEY
             api_key = (
-                api_key or
+                api_key or # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
                 dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
                 litellm.api_key or
                 litellm.openai_key or
@@ -1678,11 +1685,7 @@ def embedding(
     model, 
     input=[], 
     # Optional params
-    azure=False, 
-    force_timeout=60, 
-    litellm_call_id=None, 
-    litellm_logging_obj=None,
-    logger_fn=None, 
+    timeout=600, # default to 10 minutes 
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -1690,6 +1693,9 @@ def embedding(
     api_type: Optional[str] = None,
     caching: bool=False,
     custom_llm_provider=None,
+    litellm_call_id=None, 
+    litellm_logging_obj=None,
+    logger_fn=None, 
     **kwargs
 ):
     """
@@ -1698,8 +1704,7 @@ def embedding(
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
-    - azure: A boolean indicating whether to use the Azure API for embedding.
-    - force_timeout: The timeout value for the API call.
+    - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
     - litellm_logging_obj: The litellm logging object.
     - logger_fn: The logger function.
@@ -1716,11 +1721,12 @@ def embedding(
     Raises:
     - exception_type: If an exception occurs during the API call.
     """
+    azure = kwargs.get("azure", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
     try:
         response = None
         logging = litellm_logging_obj
-        logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"force_timeout": force_timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
+        logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
         if azure == True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -1757,8 +1763,9 @@ def embedding(
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
                 logging_obj=logging,
+                timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=kwargs
+                optional_params=kwargs,
             )
         elif model in litellm.open_ai_embedding_models:
             api_base = (
@@ -1790,6 +1797,7 @@ def embedding(
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
+                timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=kwargs
             )
