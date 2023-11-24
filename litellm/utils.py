@@ -531,7 +531,7 @@ class Logging:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
-            masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
+            masked_headers = {k: (v[:-20] + '*' * 20) if (isinstance(v, str) and len(v) > 20) else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
             print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
@@ -1309,7 +1309,7 @@ def client(original_function):
             end_time = datetime.datetime.now()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
                 my_thread = threading.Thread(
                     target=handle_failure,
                     args=(e, traceback_exception, start_time, end_time, args, kwargs),
@@ -1414,9 +1414,8 @@ def client(original_function):
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
 
     # Use httpx to determine if the original function is a coroutine
@@ -1596,12 +1595,12 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     return num_tokens
 
 
-def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
+def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Parameters:
-        model (str): The name of the model to use. Default is "gpt-3.5-turbo".
+        model (str): The name of the model to use. Default is ""
         prompt_tokens (int): The number of tokens in the prompt.
         completion_tokens (int): The number of tokens in the completion.
     
@@ -1612,6 +1611,15 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
+
+    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    azure_llms = {
+        "gpt-35-turbo": "azure/gpt-3.5-turbo",
+        "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
+        "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
+    }
+    if "azure/" in  model:
+        model = model.replace("azure/", "")
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -1620,8 +1628,25 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif "ft:gpt-3.5-turbo" in model:
+        # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-3.5-turbo"]["output_cost_per_token"] * completion_tokens
+        )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif model in azure_llms:
+        model = azure_llms[model]
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        )
     else:
-        # calculate average input cost
+        # calculate average input cost, azure/gpt-deployments can potentially go here if users don't specify, gpt-4, gpt-3.5-turbo. LLMs litellm knows
         input_cost_sum = 0
         output_cost_sum = 0
         model_cost_ref = litellm.model_cost
@@ -1637,7 +1662,7 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
 
 def completion_cost(
         completion_response=None,
-        model="gpt-3.5-turbo", 
+        model=None,
         prompt="", 
         messages: List = [],
         completion="",
@@ -1678,7 +1703,7 @@ def completion_cost(
             # get input/output tokens from completion_response
             prompt_tokens = completion_response['usage']['prompt_tokens']
             completion_tokens = completion_response['usage']['completion_tokens']
-            model = completion_response['model'] # get model from completion_response
+            model = model or completion_response['model'] # check if user passed an override for model, if it's none check completion_response['model']
         else:
             prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
@@ -2303,14 +2328,17 @@ def get_optional_params(  # use the openai defaults
             optional_params[k] = passed_params[k]
     return optional_params
 
-def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None):
+def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None, api_key: Optional[str] = None):
     try:
         dynamic_api_key = None
         # check if llm provider provided
         
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
-
+        
+        if api_key and api_key.startswith("os.environ/"): 
+            api_key_env_name = api_key.replace("os.environ/", "")
+            dynamic_api_key = os.getenv(api_key_env_name)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -3813,6 +3841,24 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"VertexAIException - {error_str}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                            response=original_exception.response
+                        )
+                    if original_exception.status_code == 500: 
+                        exception_mapping_worked = True
+                        raise APIError(
+                            message=f"VertexAIException - {error_str}",
+                            status_code=500,
+                            model=model,
+                            llm_provider="vertex_ai",
+                            request=original_exception.request
+                        )
             elif custom_llm_provider == "palm":
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
@@ -4518,8 +4564,14 @@ class CustomStreamWrapper:
         if self.logging_obj: 
             self.logging_obj.post_call(text)
     
-    def check_special_tokens(self, chunk: str): 
+    def check_special_tokens(self, chunk: str, finish_reason: Optional[str]): 
         hold = False
+        if finish_reason: 
+            for token in self.special_tokens: 
+                if token in chunk:
+                    chunk = chunk.replace(token, "") 
+            return hold, chunk
+        
         if self.sent_first_chunk is True:
             return hold, chunk
 
@@ -4977,8 +5029,9 @@ class CustomStreamWrapper:
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
+
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(completion_obj["content"])
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
                 if hold is False: 
                     completion_obj["content"] = model_response_str  
                     if self.sent_first_chunk == False:

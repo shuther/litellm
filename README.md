@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">Evaluate LLMs → OpenAI-Compatible Server</a></h4>
+<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">OpenAI-Compatible Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -116,7 +116,10 @@ print(response)
 ```
 
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-**If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+LiteLLM Proxy manages:
+* Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
+* Authentication & Spend Tracking Virtual Keys
+* Load balancing - Routing between Multiple Models + Deployments of the same model
 
 ### Step 1: Start litellm proxy
 ```shell

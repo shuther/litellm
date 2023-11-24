@@ -7,16 +7,17 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
-import os
-import sys
-from functools import partial
-
 import asyncio
 import contextvars
-import dotenv
-import openai
+import inspect
+import os
+import sys
 import time
 import traceback
+from functools import partial
+
+import dotenv
+import openai
 
 sys.path.insert(
     0, os.path.abspath("..")
@@ -398,6 +399,8 @@ def completion(
             custom_llm_provider = "openai" 
             api_key = model_api_key
 
+        if dynamic_api_key is not None:  
+            api_key = dynamic_api_key 
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
                 functions=functions,
@@ -537,7 +540,6 @@ def completion(
             # set API KEY
             api_key = (
                 api_key or # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
                 litellm.api_key or
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
@@ -1716,7 +1718,7 @@ def embedding(
     - exception_type: If an exception occurs during the API call.
     """
     azure = kwargs.get("azure", None)
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     try:
         response = None
         logging = litellm_logging_obj
