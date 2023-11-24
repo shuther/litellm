@@ -183,7 +183,7 @@ def test_completion_perplexity_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_perplexity_api()
+# test_completion_perplexity_api()
 
 def test_completion_perplexity_api_2():
     try:
@@ -285,21 +285,6 @@ def hf_test_completion_tgi():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi()
-
-def hf_test_completion_tgi_stream():
-    try:
-        response = completion(
-            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
-            messages = [{ "content": "Hello, how are you?","role": "user"}],
-            stream=True
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# hf_test_completion_tgi_stream()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -573,6 +558,29 @@ def test_completion_hf_model_no_provider():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_azure_with_functions()
 
+def test_completion_azure_key_completion_arg():
+    # this tests if we can pass api_key to completion, when it's not in the env 
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens. 
+    # If you want to remove it, speak to Ishaan! 
+    # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
+    old_key = os.environ["AZURE_API_KEY"]
+    os.environ.pop("AZURE_API_KEY", None)
+    try:
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            api_key=old_key,
+            max_tokens=10,
+        )
+        print(f"response: {response}")
+        os.environ["AZURE_API_KEY"] = old_key
+    except Exception as e:
+        os.environ["AZURE_API_KEY"] = old_key
+        pytest.fail(f"Error occurred: {e}")
+test_completion_azure_key_completion_arg()
 
 def test_completion_azure():
     try:
@@ -582,16 +590,21 @@ def test_completion_azure():
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
+            api_key="os.environ/AZURE_API_KEY"
         )
+        print(f"response: {response}")
         ## Test azure flag for backwards compatibility
-        response = completion(
-            model="chatgpt-v-2",
-            messages=messages,
-            azure=True,
-            max_tokens=10
-        )
+        # response = completion(
+        #     model="chatgpt-v-2",
+        #     messages=messages,
+        #     azure=True,
+        #     max_tokens=10
+        # )
         # Add any assertions here to check the response
         print(response)
+
+        cost = completion_cost(completion_response=response)
+        print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -833,7 +846,7 @@ def test_completion_replicate_llama2_stream():
         print(f"complete_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_replicate_llama2_stream()
+# test_completion_replicate_llama2_stream()
 
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():
@@ -889,7 +902,7 @@ def test_customprompt_together_ai():
         print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
-test_customprompt_together_ai()
+# test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:

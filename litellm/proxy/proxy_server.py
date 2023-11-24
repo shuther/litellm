@@ -9,8 +9,8 @@ import sys
 import threading
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional
-
+from typing import Optional, List
+import secrets, subprocess
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,9 +19,7 @@ sys.path.insert(
 try:
     import uvicorn
     import fastapi
-    import tomli as tomllib
     import appdirs
-    import tomli_w
     import backoff
     import yaml
     import rq
@@ -36,9 +34,7 @@ except ImportError:
             "install",
             "uvicorn",
             "fastapi",
-            "tomli",
             "appdirs",
-            "tomli-w",
             "backoff",
             "pyyaml", #TODO should it be pyyaml or yaml?
             "rq"
@@ -46,9 +42,7 @@ except ImportError:
     )
     import uvicorn
     import fastapi
-    import tomli as tomllib
     import appdirs
-    import tomli_w
     import backoff
     import yaml
 
@@ -91,11 +85,10 @@ def generate_feedback_box():
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
     )
     print()
-    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
-    print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
     print()
 
 import litellm
+from litellm.caching import DualCache
 litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.routing import APIRouter
@@ -128,14 +121,6 @@ user_telemetry = True
 user_config = None
 user_headers = None
 local_logging = True # writes logs to a local api_log.json file for debugging
-config_filename = "litellm.secrets.toml"
-config_dir = os.getcwd()
-config_dir = appdirs.user_config_dir("litellm")
-if user_debug:
-    print(config_dir)
-user_config_path = os.getenv(
-    "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
-)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -146,7 +131,7 @@ log_file = "api_log.json"
 worker_config = None
 master_key = None
 prisma_client = None
-config_cache: dict = {}
+user_api_key_cache = DualCache()
 ### REDIS QUEUE ###
 async_result = None
 celery_app_conn = None
@@ -168,7 +153,7 @@ def usage_telemetry(
         ).start()
 
 async def user_api_key_auth(request: Request):
-    global master_key, prisma_client, config_cache, llm_model_list
+    global master_key, prisma_client, llm_model_list
     if master_key is None:
         return
     try:
@@ -177,27 +162,30 @@ async def user_api_key_auth(request: Request):
         if api_key == master_key:
             return
 
-        if route == "/key/generate" and api_key != master_key:
+        if (route == "/key/generate" or route == "/key/delete") and api_key != master_key:
             raise Exception(f"If master key is set, only master key can be used to generate new keys")
 
-        if api_key in config_cache:
-            llm_model_list =  config_cache[api_key].get("model_list", [])
-            return
-
         if prisma_client:
-            valid_token = await prisma_client.litellm_verificationtoken.find_first(
-                where={
-                    "token": api_key,
-                    "expires": {"gte": datetime.utcnow()}  # Check if the token is not expired
-                }
-            )
+            ## check for cache hit (In-Memory Cache)
+            valid_token = user_api_key_cache.get_cache(key=api_key)
+            if valid_token is None:
+                ## check db
+                valid_token = await prisma_client.litellm_verificationtoken.find_first(
+                    where={
+                        "token": api_key,
+                        "expires": {"gte": datetime.utcnow()}  # Check if the token is not expired
+                    }
+                )
+                ## save to cache for 60s
+                user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+            else:
+                print(f"API Key Cache Hit!")
             if valid_token:
                 litellm.model_alias_map = valid_token.aliases
                 config = valid_token.config
                 if config != {}:
                     model_list = config.get("model_list", [])
                     llm_model_list =  model_list
-                    config_cache[api_key] = config
                     print("\n new llm router model list", llm_model_list)
                 if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
                     return
@@ -289,7 +277,31 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings: 
         for key, value in litellm_settings.items(): 
-            setattr(litellm, key, value)
+            if key == "cache":
+                # ANSI escape code for blue text
+                blue_color_code = "\033[94m"
+                reset_color_code = "\033[0m"
+                print(f"{blue_color_code}\nSetting Cache on Proxy")
+                from litellm.caching import Cache
+                cache_type = value["type"]
+                cache_host = os.environ.get("REDIS_HOST")
+                cache_port = os.environ.get("REDIS_PORT")
+                cache_password = os.environ.get("REDIS_PASSWORD")
+
+                # Assuming cache_type, cache_host, cache_port, and cache_password are strings
+                print(f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}")
+                print(f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}")
+                print(f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}")
+                print(f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}")
+                print()
+
+                litellm.cache = Cache(
+                    type=cache_type,
+                    host=cache_host,
+                    port=cache_port,
+                    password=cache_password
+                )
+
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
@@ -298,13 +310,11 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
             litellm_model_name = model["litellm_params"]["model"]
-            # print(f"litellm_model_name: {litellm_model_name}")
             if "ollama" in litellm_model_name:
                 run_ollama_serve()
-    print(f"returned general settings: {general_settings}")
     return router, model_list, general_settings
 
-async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict):
+async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict, spend: float):
     token = f"sk-{secrets.token_urlsafe(16)}"
     def _duration_in_seconds(duration: str):
         match = re.match(r"(\d+)([smhd]?)", duration)
@@ -337,7 +347,8 @@ async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict,
             "expires": expires,
             "models": models,
             "aliases": aliases_json,
-            "config": config_json
+            "config": config_json,
+            "spend": spend
         }
         print(f"verification_token_data: {verification_token_data}")
         new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
@@ -347,6 +358,22 @@ async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict,
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return {"token": new_verification_token.token, "expires": new_verification_token.expires}
+
+async def delete_verification_token(tokens: List[str]):
+    global prisma_client
+    try:
+        if prisma_client:
+            # Assuming 'db' is your Prisma Client instance
+            deleted_tokens = await prisma_client.litellm_verificationtoken.delete_many(
+                where={"token": {"in": tokens}}
+            )
+        else:
+            raise Exception
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return deleted_tokens
+
 
 async def generate_key_cli_task(duration_str):
     task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
@@ -418,17 +445,26 @@ def initialize(
         celery_setup(use_queue=use_queue)
     if experimental:
         pass
-    if save:
-        pass
-        # save_params_to_config(dynamic_config)
-        # with open(user_config_path) as f:
-        #     print(f.read())
-        # print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
-#    logging.debug(dynamic_config)
-
-
+    curl_command = """
+    curl --location 'http://0.0.0.0:8000/chat/completions' \\
+    --header 'Content-Type: application/json' \\
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+    \n
+    """
+    print()
+    print(f"\033[1;34mLiteLLM: Test your local proxy with: \"litellm --test\" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n")
+    print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
@@ -570,6 +606,7 @@ async def chat_completion(request: Request, model: Optional[str] = None):
             data = ast.literal_eval(body_str)
         except: 
             data = json.loads(body_str)
+        print(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -612,7 +649,7 @@ async def embeddings(request: Request):
         if llm_router is not None and data["model"] in router_model_names: # model in router model list
             response = await llm_router.aembedding(**data)
         else:
-            response = litellm.aembedding(**data)
+            response = await litellm.aembedding(**data)
         return response
     except Exception as e:
         traceback.print_exc()
@@ -628,13 +665,36 @@ async def generate_key_fn(request: Request):
     models = data.get("models", []) # Default to an empty list (meaning allow token to call all models)
     aliases = data.get("aliases", {}) # Default to an empty dict (no alias mappings, on top of anything in the config.yaml model_list)
     config = data.get("config", {})
+    spend = data.get("spend", 0)
     if isinstance(models, list):
-        response = await generate_key_helper_fn(duration_str=duration_str, models=models, aliases=aliases, config=config)
+        response = await generate_key_helper_fn(duration_str=duration_str, models=models, aliases=aliases, config=config, spend=spend)
         return {"key": response["token"], "expires": response["expires"]}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "models param must be a list"},
+        )
+
+@router.post("/key/delete", dependencies=[Depends(user_api_key_auth)])
+async def delete_key_fn(request: Request):
+    try:
+        data = await request.json()
+
+        keys = data.get("keys", [])
+
+        if not isinstance(keys, list):
+            if isinstance(keys, str):
+                keys = [keys]
+            else:
+                raise Exception(f"keys must be an instance of either a string or a list")
+
+        deleted_keys = await delete_verification_token(tokens=keys)
+        assert len(keys) == deleted_keys
+        return {"deleted_keys": keys}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
         )
 
 @router.get("/test")

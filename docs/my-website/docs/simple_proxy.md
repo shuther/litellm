@@ -7,11 +7,10 @@ import TabItem from '@theme/TabItem';
 LiteLLM Server manages:
 
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
-* Authentication - [Virtual Keys](#managing-auth---virtual-keys)
-* Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
-* Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
+* Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
+* Load balancing - Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
 
-[**See code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
+[**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 ## Quick Start 
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
@@ -74,7 +73,15 @@ print(response)
 
 </Tabs>
 
+### Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
+- POST `/key/generate` - generate a key to access the proxy
+
 ### Supported LLMs
+All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
 <Tabs>
 <TabItem value="bedrock" label="AWS Bedrock">
 
@@ -223,12 +230,6 @@ $ litellm --model command-nightly
 </TabItem>
 
 </Tabs>
-
-### Server Endpoints
-- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- POST `/completions` - completions endpoint
-- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- GET `/models` - available models on server
 
 
 ## Using with OpenAI compatible projects
@@ -566,10 +567,11 @@ The Config allows you to set the following params
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` |
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
+| `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
-### Example Config
+#### Example Config
 ```yaml
 model_list:
   - model_name: zephyr-alpha
@@ -587,9 +589,17 @@ litellm_settings:
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+
+
+environment_variables:
+  OPENAI_API_KEY: sk-123
+  REPLICATE_API_KEY: sk-cohere-is-okay
+  REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+  REDIS_PORT: "16337"
+  REDIS_PASSWORD: 
 ```
 
-### Multiple Models
+### Config for Multiple Models - GPT-4, Claude-2, etc
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -796,7 +806,7 @@ model_list:
         model: ollama/llama2
 ```
 
-### Multiple Instances of 1 model
+### Load Balancing - Multiple Instances of 1 model
 
 If you have multiple instances of the same model,
 
@@ -869,6 +879,80 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
+### Caching Responses 
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  set_verbose: True
+  cache:          # init cache
+    type: redis   # tell litellm to use redis caching
+```
+
+#### Step 2: Add Redis Credentials to .env
+LiteLLM requires the following REDIS credentials in your env to enable caching
+
+  ```shell
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Using Caching 
+Send the same request twice:
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7
+   }'
+
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7
+   }'
+```
+
+#### Control caching per completion request
+Caching can be switched on/off per `/chat/completions` request
+- Caching **on** for completion - pass `caching=True`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": true
+   }'
+  ```
+- Caching **off** for completion - pass `caching=False`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": false
+   }'
+  ```
+
 
 ## Debugging Proxy 
 Run the proxy with `--debug` to easily view debug logs 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.5.0"
+version = "1.6.0"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
@@ -50,6 +50,7 @@ anthropic = "~0.7.0"
 huggingface-hub = "~0.19.2"
 autoevals = "^0.0.31"
 prisma = "*"
+celery = "*"
 tenacity = "*"
 #seems a big one, depends on nvidia
 #torch = "~2.1.1"
@@ -72,7 +73,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.5.0"
+version = "1.6.0"
 version_files = [
     "pyproject.toml:^version"
 ]
