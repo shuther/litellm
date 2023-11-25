@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import concurrent
 import inspect
 import logging
 import os
@@ -15,12 +16,10 @@ import random
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal
-import random, threading, time
-import logging, asyncio
-import inspect, concurrent
-from openai import AsyncOpenAI
+
 import openai
 
 sys.path.insert(
@@ -509,12 +508,12 @@ class Router:
             start_time, end_time    # start/end time
     ):
         try:
-        model_name = kwargs.get('model', None)  # i.e. gpt35turbo
-        custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
-        if custom_llm_provider:
-            model_name = f"{custom_llm_provider}/{model_name}"
+            model_name = kwargs.get('model', None)  # i.e. gpt35turbo
+            custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
+            if custom_llm_provider:
+                model_name = f"{custom_llm_provider}/{model_name}"
 
-        self._set_cooldown_deployments(model_name)
+            self._set_cooldown_deployments(model_name)
         except Exception as e:
             raise e
 
