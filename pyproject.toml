@@ -6,6 +6,9 @@ authors = ["BerriAI"]
 license = "MIT License"
 readme = "README.md"
 
+# To install, use:
+# poetry install --with utils
+
 [tool.poetry.dependencies]
 python = "^3.10"
 openai = ">=1.3.0"
@@ -52,6 +55,11 @@ autoevals = "^0.0.31"
 prisma = "*"
 celery = "*"
 tenacity = "*"
+mangum = "*"
+langfuse = "*"
+waitress = "*"
+torch = "*"
+transformers = "*"
 #seems a big one, depends on nvidia
 #torch = "~2.1.1"
 
