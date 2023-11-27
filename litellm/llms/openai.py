@@ -199,7 +199,7 @@ class OpenAIChatCompletion(BaseLLM):
                     api_key=api_key,
                     additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
                 )
-                
+
                 try: 
                     if acompletion is True: 
                         if optional_params.get("stream", False):
@@ -309,8 +309,8 @@ class OpenAIChatCompletion(BaseLLM):
                 timeout: float, 
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
+                model_response: Optional[litellm.utils.EmbeddingResponse] = None,
                 logging_obj=None,
-                model_response=None,
                 optional_params=None,
                 ):
         super().embedding()
@@ -331,8 +331,9 @@ class OpenAIChatCompletion(BaseLLM):
             logging_obj.pre_call(
                     input=input,
                     api_key=api_key,
-                    additional_args={"complete_input_dict": data},
+                    additional_args={"complete_input_dict": data, "api_base": api_base},
                 )
+            
             ## COMPLETION CALL
             response = openai_client.embeddings.create(**data) # type: ignore
             ## LOGGING
@@ -343,21 +344,7 @@ class OpenAIChatCompletion(BaseLLM):
                     original_response=response,
                 )
             
-            embedding_response = json.loads(response.model_dump_json())
-            output_data = []
-            for idx, embedding in enumerate(embedding_response["data"]):
-                output_data.append(
-                    {
-                        "object": embedding["object"],
-                        "index": embedding["index"],
-                        "embedding": embedding["embedding"]
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = output_data
-            model_response["model"] = model
-            model_response["usage"] = embedding_response["usage"]
-            return model_response
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except OpenAIError as e: 
             exception_mapping_worked = True
             raise e

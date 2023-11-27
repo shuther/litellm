@@ -1092,13 +1092,13 @@ license = ["ukkonen"]
 
 [[package]]
 name = "idna"
-version = "3.5"
+version = "3.6"
 description = "Internationalized Domain Names in Applications (IDNA)"
 optional = false
 python-versions = ">=3.5"
 files = [
-    {file = "idna-3.5-py3-none-any.whl", hash = "sha256:79b8f0ac92d2351be5f6122356c9a592c96d81c9a79e4b488bf2a6a15f88057a"},
-    {file = "idna-3.5.tar.gz", hash = "sha256:27009fe2735bf8723353582d48575b23c533cc2c2de7b5a68908d91b5eb18d08"},
+    {file = "idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f"},
+    {file = "idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca"},
 ]
 
 [[package]]
@@ -1347,13 +1347,13 @@ text-helpers = ["chardet (>=5.1.0,<6.0.0)"]
 
 [[package]]
 name = "langfuse"
-version = "1.8.2"
+version = "1.9.2"
 description = "A client library for accessing langfuse"
 optional = false
 python-versions = ">=3.8.1,<4.0"
 files = [
-    {file = "langfuse-1.8.2-py3-none-any.whl", hash = "sha256:3a3140396fb020f693d2231c01e7af660603592e76c313e0ba32003ac49d1e32"},
-    {file = "langfuse-1.8.2.tar.gz", hash = "sha256:781e2853a0e3d92c73689630b8c152a50415f62850cac8eeef35404876f1108d"},
+    {file = "langfuse-1.9.2-py3-none-any.whl", hash = "sha256:0a171830ec15b26e6b512db4612422a48402d422c1269091390d0b81fbdfe46b"},
+    {file = "langfuse-1.9.2.tar.gz", hash = "sha256:6542d38013e9ca21ab3d31840bdd517a79cb6db72ddb30fec8ad0d999d0e2bfd"},
 ]
 
 [package.dependencies]
@@ -3895,4 +3895,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "98cc1a318a0d2f3faaf29a4c7a84c6d6d2261270c72884dac22fd8c195754ad7"
+content-hash = "23ff6f0162903ce9952ec134bcad6195822299cb116b836c978f8f5b186f56a0"

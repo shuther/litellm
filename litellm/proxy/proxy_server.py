@@ -87,11 +87,13 @@ def generate_feedback_box():
     print()
     print()
 
+
 import litellm
 from litellm.caching import DualCache
 litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.routing import APIRouter
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -233,10 +235,10 @@ def celery_setup(use_queue: bool):
         celery_app_conn = celery_app
 
 def run_ollama_serve():
-    command = ['ollama', 'serve']
+        command = ['ollama', 'serve']
 
-    with open(os.devnull, 'w') as devnull:
-        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+        with open(os.devnull, 'w') as devnull:
+            process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     global master_key
@@ -374,11 +376,9 @@ async def delete_verification_token(tokens: List[str]):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return deleted_tokens
 
-
 async def generate_key_cli_task(duration_str):
     task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
     await task
-
 
 def save_worker_config(**data): 
     import json

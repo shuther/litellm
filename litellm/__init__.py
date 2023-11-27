@@ -25,7 +25,6 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 retry = True
-request_timeout: Optional[float] = 6000
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -56,12 +55,15 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-model_fallbacks: Optional[list] = None
-model_cost_map_url: str = os.environ.get('LLM_MODEL_COST_MAP_URL', "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
-
-# can be found under ../
-num_retries: Optional[int] = None
+model_fallbacks: Optional[list] = None  #Deprecated for 'litellm.fallbacks'
+model_cost_map_url: str =  os.environ.get('LLM_MODEL_COST_MAP_URL', "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
 suppress_debug_info = False
+#### RELIABILITY ####
+request_timeout: Optional[float] = 6000
+num_retries: Optional[int] = None
+fallbacks: Optional[list] = None
+context_window_fallbacks: Optional[list] = None
+allowed_fails: int = 0
 #############################################
 
 
@@ -241,6 +243,8 @@ with open("litellm/config/embedding_model.json5") as json5_file:
     open_ai_embedding_models: list = embedding_data["open_ai_embedding_models"]
     cohere_embedding_models: list = embedding_data["cohere_embedding_models"]
     bedrock_embedding_models: list = embedding_data["bedrock_embedding_models"]
+
+all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
 
 from .timeout import timeout
 from .utils import (
