@@ -113,6 +113,8 @@ class UnsupportedParamsError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url=" https://openai.api.com/v1/")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -343,14 +345,52 @@ class ModelResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
+class Embedding(OpenAIObject):
+    embedding: list = []
+    index: int
+    object: str
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
 class EmbeddingResponse(OpenAIObject):
-    def __init__(self, model=None, usage=None, stream=False, response_ms=None):
+    model: Optional[str] = None
+    """The model used for embedding."""
+
+    data: Optional[List] = None
+    """The actual embedding value"""
+
+    object: str
+    """The object type, which is always "embedding" """
+
+    usage: Optional[Usage] = None
+    """Usage statistics for the embedding request."""
+
+    def __init__(self, model=None, usage=None, stream=False, response_ms=None, data=None):
         object = "list"
         if response_ms:
             _response_ms = response_ms
         else:
             _response_ms = None
-        data = []
+        if data:
+            data = data
+        else:
+            data = None
+
+        if usage:
+            usage = usage
+        else:
+            usage = Usage()
+
         model = model
         super().__init__(model=model, object=object, data=data, usage=usage)
 
@@ -649,6 +689,7 @@ class Logging:
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
+            print_verbose(f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -719,7 +760,7 @@ class Logging:
             if self.stream: 
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
                     self.streaming_chunks.append(result)
-                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
+                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
                 else:
                     self.streaming_chunks.append(result)
             elif isinstance(result, OpenAIObject):
@@ -1027,7 +1068,7 @@ class Logging:
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
-        except:
+        except Exception as e:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
             )
@@ -1246,8 +1287,11 @@ def client(original_function):
                             pass
                         else: 
                             call_type = original_function.__name__
+                            print_verbose(f"Cache Response Object routing: call_type - {call_type}; cached_result instace: {type(cached_result)}")
                             if call_type == CallTypes.completion.value and isinstance(cached_result, dict):
                                 return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
+                            elif call_type == CallTypes.embedding.value and isinstance(cached_result, dict):
+                                return convert_to_model_response_object(response_object=cached_result, response_type="embedding")
                             else:
                                 return cached_result
             # MODEL CALL
@@ -1259,7 +1303,7 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
@@ -1369,7 +1413,7 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
             
@@ -1843,7 +1887,7 @@ def get_optional_params(  # use the openai defaults
     max_tokens=None,
     presence_penalty=None,
     frequency_penalty=0,
-    logit_bias={},
+    logit_bias=None,
     user="",
     model=None,
     custom_llm_provider="",
@@ -1870,7 +1914,7 @@ def get_optional_params(  # use the openai defaults
         "max_tokens":None,
         "presence_penalty":None,
         "frequency_penalty":None,
-        "logit_bias":{},
+        "logit_bias": None,
         "user":"",
         "model":None,
         "custom_llm_provider":"",
@@ -1936,7 +1980,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens"] = max_tokens
         if n is not None:
             optional_params["num_generations"] = n
-        if logit_bias != {}:
+        if logit_bias is not None:
             optional_params["logit_bias"] = logit_bias
         if top_p is not None:
             optional_params["p"] = top_p
@@ -1957,7 +2001,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
-        if logit_bias != {}:
+        if logit_bias is not None:
             optional_params["logit_bias"] = logit_bias
         if top_p is not None:
             optional_params["p"] = top_p
@@ -2185,7 +2229,7 @@ def get_optional_params(  # use the openai defaults
                 optional_params["max_tokens"] = max_tokens
             if n is not None:
                 optional_params["num_generations"] = n
-            if logit_bias != {}:
+            if logit_bias is not None:
                 optional_params["logit_bias"] = logit_bias
             if top_p is not None:
                 optional_params["p"] = top_p
@@ -2274,7 +2318,7 @@ def get_optional_params(  # use the openai defaults
         if n: 
             optional_params["n"] = n
         if stream: 
-            optional_params["stream"] = str
+            optional_params["stream"] = stream
         if stop: 
             optional_params["stop"] = stop
         if max_tokens: 
@@ -2321,6 +2365,40 @@ def get_optional_params(  # use the openai defaults
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
+        if functions is not None:
+            optional_params["functions"] = functions
+        if function_call is not None:
+            optional_params["function_call"] = function_call
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if n is not None:
+            optional_params["n"] = n
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias is not None:
+            optional_params["logit_bias"] = logit_bias
+        if user is not None:
+            optional_params["user"] = user
+        if response_format is not None:
+            optional_params["response_format"] = response_format
+        if seed is not None:
+            optional_params["seed"] = seed
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
     for k in passed_params.keys(): 
@@ -3207,8 +3285,9 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         pass
 
 
-def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
+def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[Union[ModelResponse, EmbeddingResponse]]=None, response_type: Literal["completion", "embedding"] = "completion"):
         try: 
+            if response_type == "completion" and (model_response_object is None or isinstance(model_response_object, ModelResponse)):
             if response_object is None or model_response_object is None:
                 raise Exception("Error in response object format")
             choice_list=[]
@@ -3227,20 +3306,51 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
-            if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
+                if "usage" in response_object and response_object["usage"] is not None:
+                    model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                    model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                    model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
 
-            if "id" in response_object: 
-                model_response_object.id = response_object["id"]
-            
-            if "system_fingerprint" in response_object:
-                model_response_object.system_fingerprint = response_object["system_fingerprint"]
+                if "id" in response_object:
+                    model_response_object.id = response_object["id"]
+
+                if "system_fingerprint" in response_object:
+                    model_response_object.system_fingerprint = response_object["system_fingerprint"]
 
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
-            return model_response_object
+                return model_response_object
+            elif response_type == "embedding" and (model_response_object is None or isinstance(model_response_object, EmbeddingResponse)):
+                if response_object is None:
+                    raise Exception("Error in response object format")
+
+                if model_response_object is None:
+                    model_response_object = EmbeddingResponse()
+
+                if "model" in response_object:
+                    model_response_object.model = response_object["model"]
+
+                if "object" in response_object:
+                    model_response_object.object = response_object["object"]
+
+                embedding_data = []
+                for idx, embedding in enumerate(response_object["data"]):
+                    embedding_obj = Embedding(
+                        embedding=embedding.get("embedding", None),
+                        index = embedding.get("index", idx),
+                        object=embedding.get("object", "embedding")
+                    )
+                    embedding_data.append(embedding_obj)
+
+                model_response_object.data = embedding_data
+
+                if "usage" in response_object and response_object["usage"] is not None:
+                    model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                    model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                    model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
+
+
+                return model_response_object
         except Exception as e: 
             raise Exception(f"Invalid response object {e}")
 
@@ -4550,6 +4660,7 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = "" 
+        self.complete_response = ""
         if self.logging_obj:
                 # Log the type of the received item
                 self.logging_obj.post_call(str(type(completion_stream)))
@@ -4559,6 +4670,23 @@ class CustomStreamWrapper:
 
     def __aiter__(self):
         return self
+
+    def process_chunk(self, chunk: str):
+        """
+        NLP Cloud streaming returns the entire response, for each chunk. Process this, to only return the delta.
+        """
+        try:
+            chunk = chunk.strip()
+            self.complete_response = self.complete_response.strip()
+
+            if chunk.startswith(self.complete_response):
+                # Remove last_sent_chunk only if it appears at the start of the new chunk
+                chunk = chunk[len(self.complete_response):]
+
+            self.complete_response += chunk
+            return chunk
+        except Exception as e:
+            raise e
 
     def logging(self, text):
         if self.logging_obj: 
@@ -4683,14 +4811,22 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_nlp_cloud_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        text = ""
+        is_finished = False
+        finish_reason = ""
         try:
-            text = data_json["generated_text"]
-            is_finished = True
-            finish_reason = "stop"
+            if "dolphin" in self.model:
+                chunk = self.process_chunk(chunk=chunk)
+            else:
+                data_json = json.loads(chunk)
+                chunk = data_json["generated_text"]
+            text = chunk
+            if "[DONE]" in text:
+                text = text.replace("[DONE]", "")
+                is_finished = True
+                finish_reason = "stop"
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-        except:
+        except Exception as e:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_aleph_alpha_chunk(self, chunk):
@@ -4934,9 +5070,8 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
-                try: 
-
+            elif self.custom_llm_provider == "nlp_cloud":
+                try:
                     response_obj = self.handle_nlp_cloud_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
@@ -5022,17 +5157,16 @@ class CustomStreamWrapper:
                     return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
-
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
-                if hold is False: 
+                print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
+                if hold is False:
                     completion_obj["content"] = model_response_str  
                     if self.sent_first_chunk == False:
                         completion_obj["role"] = "assistant"
@@ -5040,6 +5174,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
+                    print_verbose(f"model_response: {model_response}")
                     return model_response
                 else: 
                     return 
@@ -5084,7 +5219,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 
                 print_verbose(f"chunk in __next__: {chunk}")
-                if chunk is not None:
+                if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     print_verbose(f"response in __next__: {response}")
                     if response is not None:

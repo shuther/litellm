@@ -16,15 +16,19 @@ litellm.set_verbose = False
 
 def test_openai_embedding():
     try:
+        litellm.set_verbose=True
         response = embedding(
-            model="text-embedding-ada-002", input=["good morning from litellm", "this is another item"]
+            model="text-embedding-ada-002", 
+            input=["good morning from litellm", "this is another item"], 
+            metadata =  {"anything": "good day"}
         )
         litellm_response = dict(response)
-        litellm_response.pop("_response_ms")
         litellm_response_keys = set(litellm_response.keys())
+        litellm_response_keys.discard('_response_ms')
+
         print(litellm_response_keys)
         print("LiteLLM Response\n")
-        print(litellm_response)
+        # print(litellm_response)
         
         # same request with OpenAI 1.0+ 
         import openai
@@ -35,6 +39,7 @@ def test_openai_embedding():
 
         response = dict(response)
         openai_response_keys = set(response.keys())
+        print(openai_response_keys)
         assert litellm_response_keys == openai_response_keys # ENSURE the Keys in litellm response is exactly what the openai package returns
         assert len(litellm_response["data"]) == 2 # expect two embedding responses from litellm_response since input had two
         print(openai_response_keys)
@@ -49,8 +54,9 @@ def test_openai_azure_embedding_simple():
             input=["good morning from litellm"],
         )
         print(response)
-        response_keys = dict(response).keys()
-        assert set(["usage", "model", "object", "data", "_response_ms"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
+        response_keys = set(dict(response).keys())
+        response_keys.discard('_response_ms')
+        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -87,7 +93,7 @@ def test_openai_embedding_timeouts():
         pass
     except Exception as e:
         pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
-test_openai_embedding_timeouts()
+# test_openai_embedding_timeouts()
 
 def test_openai_azure_embedding():
     try:
@@ -186,3 +192,12 @@ def test_aembedding():
 
 # test_aembedding()
 
+# def test_custom_openai_embedding():
+#     litellm.set_verbose=True
+#     response = embedding(
+#             model="openai/custom_embedding", 
+#             input=["good morning from litellm"],
+#             api_base="http://0.0.0.0:8000/"
+#         )
+#     print(response)
+# test_custom_openai_embedding()

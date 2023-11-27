@@ -179,7 +179,7 @@ def test_completion_azure_exception():
         litellm.set_verbose=False
         ## Test azure call
         old_azure_key = os.environ["AZURE_API_KEY"]
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_API_KEY"] = "good morning"
         response = completion(
             model="azure/chatgpt-v-2",
             messages=[
@@ -191,12 +191,77 @@ def test_completion_azure_exception():
         )
         print(f"response: {response}")
         print(response)
-    except openai.APIConnectionError as e:
+    except openai.AuthenticationError as e:
         os.environ["AZURE_API_KEY"] = old_azure_key
         print("good job got the correct error for azure when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_azure_exception()
+
+async def asynctest_completion_azure_exception():
+    try:
+        import openai
+        import litellm
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        old_azure_key = os.environ["AZURE_API_KEY"]
+        os.environ["AZURE_API_KEY"] = "good morning"
+        response = await litellm.acompletion(
+            model="azure/chatgpt-v-2",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ],
+        )
+        print(f"response: {response}")
+        print(response)
+    except openai.AuthenticationError as e:
+        os.environ["AZURE_API_KEY"] = old_azure_key
+        print("good job got the correct error for azure when key not set")
+        print(e)
+    except Exception as e:
+        print("Got wrong exception")
+        print("exception", e)
+        pytest.fail(f"Error occurred: {e}")
+
+import asyncio
+asyncio.run(
+    asynctest_completion_azure_exception()
+)
+
+
+def test_completion_openai_exception():
+    # test if openai:gpt raises openai.AuthenticationError
+    try:
+        import openai
+        print("openai gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        old_azure_key = os.environ["OPENAI_API_KEY"]
+        os.environ["OPENAI_API_KEY"] = "good morning"
+        response = completion(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ],
+        )
+        print(f"response: {response}")
+        print(response)
+    except openai.AuthenticationError as e:
+        os.environ["OPENAI_API_KEY"] = old_azure_key
+        print("good job got the correct error for openai when key not set")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_exception()
+
+
+
 
 # test_invalid_request_error(model="command-nightly")
 # Test 3: Rate Limit Errors

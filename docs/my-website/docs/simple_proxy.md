@@ -16,6 +16,10 @@ LiteLLM Server manages:
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
+$ pip install litellm
+```
+
+```shell
 $ litellm --model huggingface/bigcode/starcoder
 
 #INFO: Proxy running on http://0.0.0.0:8000
@@ -236,68 +240,6 @@ $ litellm --model command-nightly
 LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
 <Tabs>
-<TabItem value="lm-harness" label="LM-Harness Evals">
-This tutorial assumes you're using the `big-refactor` branch of LM Harness https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor
-
-NOTE: LM Harness has not updated to using `openai 1.0.0+`, in order to deal with this we will run lm harness in a venv
-
-**Step 1: Start the local proxy**
-see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-Using a custom api base
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
-$ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
-```
-OpenAI Compatible Endpoint at http://0.0.0.0:8000
-
-**Step 2: Create a Virtual Env for LM Harness + Use OpenAI 0.28.1**
-We will now run lm harness with a new virtual env with openai==0.28.1
-
-```shell
-python3 -m venv lmharness 
-source lmharness/bin/activate
-```
-
-Pip install openai==0.28.01 in the venv
-```shell
-pip install openai==0.28.01
-```
-
-**Step 3: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for running benchmarks
-```shell
-export OPENAI_API_SECRET_KEY=anything
-```
-
-**Step 4: Run LM-Eval-Harness**
-```shell
-cd lm-evaluation-harness
-```
-
-pip install lm harness dependencies in venv
-```
-python3 -m pip install -e .
-```
-
-```shell
-python3 -m lm_eval \
-  --model openai-completions \
-  --model_args engine=davinci \
-  --task crows_pairs_english_age
-
-```
-
-
-</TabItem>
 
 <TabItem value="flask evals" label="FLASK Evals">
 FLASK - Fine-grained Language Model Evaluation 
@@ -599,7 +541,7 @@ environment_variables:
   REDIS_PASSWORD: 
 ```
 
-### Config for Multiple Models - GPT-4, Claude-2, etc
+### Config for Multiple Models - GPT-4, Claude-2
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -734,7 +676,7 @@ model_list:
 	- model_name: my-paid-tier
     litellm_params:
         model: gpt-4
-				api_key: sk-...
+        api_key: my-api-key
 ```
 
 **Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
@@ -752,6 +694,40 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 
 - **How to upgrade / downgrade request?** Change the alias mapping
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
+### Managing Auth - Tracking Spend 
+
+You can get spend for a key by using the `/key/info` endpoint. 
+
+```bash
+curl 'http://0.0.0.0:8000/key/info?key=<user-key>' \
+     -X GET \
+     -H 'Authorization: Bearer <your-master-key>'
+```
+
+This is automatically updated (in USD) when calls are made to /completions, /chat/completions, /embeddings using litellm's completion_cost() function. [**See Code**](https://github.com/BerriAI/litellm/blob/1a6ea20a0bb66491968907c2bfaabb7fe45fc064/litellm/utils.py#L1654). 
+
+**Sample response**
+
+```python
+{
+    "key": "sk-tXL0wt5-lOOVK9sfY2UacA",
+    "info": {
+        "token": "sk-tXL0wt5-lOOVK9sfY2UacA",
+        "spend": 0.0001065,
+        "expires": "2023-11-24T23:19:11.131000Z",
+        "models": [
+            "gpt-3.5-turbo",
+            "gpt-4",
+            "claude-2"
+        ],
+        "aliases": {
+            "mistral-7b": "gpt-3.5-turbo"
+        },
+        "config": {}
+    }
+}
+```
 
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
@@ -785,26 +761,28 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-### Model Alias 
 
-Set a model alias for your deployments. 
+### Load API Keys from Vault 
 
-In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+If you have secrets saved in Azure Vault, etc. and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
 
-In the config below requests with `model=gpt-4` will route to `ollama/zephyr`
-
-```yaml
-model_list:
-  - model_name: text-davinci-003
-    litellm_params:
-        model: ollama/zephyr
-  - model_name: gpt-4
-    litellm_params:
-        model: ollama/llama2
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-        model: ollama/llama2
+```python
+os.environ["AZURE_NORTH_AMERICA_API_KEY"] = "your-azure-api-key"
 ```
+
+```yaml 
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
+
+s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
 ### Load Balancing - Multiple Instances of 1 model
 
@@ -853,33 +831,110 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 '
 ```
 
-### Set Custom Prompt Templates
+### Fallbacks + Cooldowns + Retries + Timeouts 
 
-LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+If a call fails after num_retries, fall back to another model group.
 
-**Step 1**: Save your prompt template in a `config.yaml`
+If the error is a context window exceeded error, fall back to a larger model group (if given).
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
+**Set via config**
 ```yaml
-# Model-specific parameters
 model_list:
-  - model_name: mistral-7b # model alias
-    litellm_params: # actual params for litellm.completion()
-      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
-      api_base: "<your-api-base>"
-      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
-      initial_prompt_value: "\n"
-      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
-      final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
-      max_tokens: 4096
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: gpt-3.5-turbo
+        api_key: <my-openai-key>
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: <my-openai-key>
+
+litellm_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
-**Step 2**: Start server with config
+**Set dynamically**
 
+```bash
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "num_retries": 2,
+      "request_timeout": 10
+    }
+'
+```
+
+### Config for Embedding Models - xorbitsai/inference
+
+Here's how you can use multiple llms with one proxy `config.yaml`. 
+Here is how [LiteLLM calls OpenAI Compatible Embedding models](https://docs.litellm.ai/docs/embedding/supported_embedding#openai-compatible-embedding-models)
+
+#### Config
+```yaml
+model_list:
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8000/
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8001/
+```
+
+Run the proxy using this config
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
 
+### Config for setting Model Aliases
+
+Set a model alias for your deployments. 
+
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+In the config below requests with `model=gpt-4` will route to `ollama/llama2`
+
+```yaml
+model_list:
+  - model_name: text-davinci-003
+    litellm_params:
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
+```
 ### Caching Responses 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 #### Step 1: Add `cache` to the config.yaml
@@ -953,6 +1008,32 @@ Caching can be switched on/off per `/chat/completions` request
    }'
   ```
 
+### Set Custom Prompt Templates
+
+LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    litellm_params: # actual params for litellm.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: "<s>"
+      eos_token: "</s>"
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
 
 ## Debugging Proxy 
 Run the proxy with `--debug` to easily view debug logs 
@@ -1003,6 +1084,18 @@ litellm --test
 Expected output on Langfuse
 
 <Image img={require('../img/langfuse_small.png')} />
+
+## LiteLLM Proxy Performance
+
+### Throughput - 30% Increase
+LiteLLM proxy + Load Balancer gives **30% increase** in throughput compared to Raw OpenAI API
+<Image img={require('../img/throughput.png')} />
+
+### Latency Added - 0.00325 seconds
+LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw OpenAI API
+<Image img={require('../img/latency.png')} />
+
+
 
 
 ## Proxy CLI Arguments

@@ -410,7 +410,8 @@ def test_completion_openai():
             model="gpt-3.5-turbo", 
             messages=messages, 
             max_tokens=10, 
-            request_timeout=0.1
+            request_timeout=1,
+            metadata = {"hi": "bye"}
         )
         print("This is the response object\n", response)
 
@@ -455,7 +456,8 @@ def test_completion_openai_with_optional_params():
             temperature=0.5,
             top_p=0.1,
             seed=12,
-            response_format={ "type": "json_object" }
+            response_format={ "type": "json_object" },
+            logit_bias=None,
         )
         # Add any assertions here to check the response
         print(response)
@@ -580,7 +582,7 @@ def test_completion_azure_key_completion_arg():
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_key_completion_arg()
+# test_completion_azure_key_completion_arg()
 
 def test_completion_azure():
     try:
@@ -958,6 +960,7 @@ def test_completion_bedrock_claude():
 
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
+    litellm.set_verbose = True
     try:
         response = completion(
             model="bedrock/cohere.command-text-v14", 
@@ -974,7 +977,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_cohere()
+test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
@@ -1351,6 +1354,7 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_ai21()
 # test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
