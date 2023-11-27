@@ -67,14 +67,14 @@ transformers = "*"
 litellm = 'litellm:run_server'
 
 [tool.poetry.group.dev.dependencies]
-black = ">=23.11.0"
-pydantic-core = "^2.14.1"
-pre-commit = "^3.5.0"
-pytest = "^7.4.3"
-termcolor = "^2.3.0"
-gptcache = "^0.1.42"
-flask = "^3.0.0"
-flask-cors = "^4.0.0"
+black = "*"
+pydantic-core = "*"
+pre-commit = "*"
+pytest = "*"
+termcolor = "*"
+gptcache = "*"
+flask = "*"
+flask-cors = "*"
 
 [build-system]
 requires = ["poetry-core"]
