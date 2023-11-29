@@ -584,6 +584,54 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_key_completion_arg()
 
+
+async def test_re_use_azure_async_client():
+    try:
+        print("azure gpt-3.5 ASYNC with clie nttest\n\n")
+        litellm.set_verbose=True
+        import openai
+        client = openai.AsyncAzureOpenAI(
+                azure_endpoint=os.environ['AZURE_API_BASE'],
+                api_key=os.environ["AZURE_API_KEY"],
+                api_version="2023-07-01-preview",
+        )
+        ## Test azure call
+        for _ in range(3):
+            response = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                client=client
+            )
+            print(f"response: {response}")
+    except Exception as e:
+        pytest.fail("got Exception", e)
+
+# import asyncio
+# asyncio.run(
+#     test_re_use_azure_async_client()
+# )
+
+
+def test_re_use_openaiClient():
+    try:
+        print("gpt-3.5  with client test\n\n")
+        litellm.set_verbose=True
+        import openai
+        client = openai.OpenAI(
+                api_key=os.environ["OPENAI_API_KEY"],
+        )
+        ## Test OpenAI call
+        for _ in range(2):
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                client=client
+            )
+            print(f"response: {response}")
+    except Exception as e:
+        pytest.fail("got Exception", e)
+test_re_use_openaiClient()
+
 def test_completion_azure():
     try:
         print("azure gpt-3.5 test\n\n")
@@ -908,19 +956,33 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
+        print("testing sagemaker")
+        litellm.set_verbose=True
         response = completion(
             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            logger_fn=logger_fn
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_sagemaker() 
 
-# test_completion_sagemaker()
+def test_completion_chat_sagemaker():
+    try:
+        print("testing sagemaker")
+        litellm.set_verbose=True
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
+            messages=messages,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_chat_sagemaker()
 
 def test_completion_bedrock_titan():
     try:
@@ -977,7 +1039,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_cohere()
+# test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():

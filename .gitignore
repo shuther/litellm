@@ -20,3 +20,4 @@ router_config.yaml
 litellm/proxy/_secret_config.yaml
 legacy/
 .aws-sam/
+litellm/tests/aiologs.log

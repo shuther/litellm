@@ -268,6 +268,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if general_settings:
         ### MASTER KEY ###
         master_key = general_settings.get("master_key", None)
+        if master_key and master_key.startswith("os.environ/"):
+            master_key_env_name = master_key.replace("os.environ/", "")
+            master_key = os.getenv(master_key_env_name)
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         prisma_setup(database_url=database_url)
@@ -277,12 +280,12 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
-    if litellm_settings: 
-        for key, value in litellm_settings.items(): 
+    if litellm_settings:
+        # ANSI escape code for blue text
+        blue_color_code = "\033[94m"
+        reset_color_code = "\033[0m"
+        for key, value in litellm_settings.items():
             if key == "cache":
-                # ANSI escape code for blue text
-                blue_color_code = "\033[94m"
-                reset_color_code = "\033[0m"
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
@@ -303,11 +306,13 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     port=cache_port,
                     password=cache_password
                 )
+            else:
+                setattr(litellm, key, value)
 
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
-        router = litellm.Router(model_list=model_list)
+        router = litellm.Router(model_list=model_list, num_retries=3)
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
@@ -532,10 +537,10 @@ def model_list():
     if general_settings.get("infer_model_from_keys", False):
         all_models = litellm.utils.get_valid_models()
     if llm_model_list: 
-        print(f"llm model list: {llm_model_list}")
-        all_models += [m["model_name"] for m in llm_model_list]
+        all_models = list(set(all_models + [m["model_name"] for m in llm_model_list]))
     if user_model is not None:
-        all_models += user_model
+        all_models += [user_model]
+    print(f"all_models: {all_models}")
     ### CHECK OLLAMA MODELS ### 
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
@@ -597,8 +602,8 @@ async def completion(request: Request, model: Optional[str] = None):
 @router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)])
 @router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)])
 @router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)]) # azure compatible endpoint
-async def chat_completion(request: Request, model: Optional[str] = None):
-    global general_settings
+async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
+    global general_settings, user_debug
     try: 
         body = await request.body()
         body_str = body.decode()
@@ -619,6 +624,20 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         )
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        if llm_router is not None and data["model"] in router_model_names:
+            print("Results from router")
+            print("\nRouter stats")
+            print("\nTotal Calls made")
+            for key, value in llm_router.total_calls.items():
+                print(f"{key}: {value}")
+            print("\nSuccess Calls made")
+            for key, value in llm_router.success_calls.items():
+                print(f"{key}: {value}")
+            print("\nFail Calls made")
+            for key, value in llm_router.fail_calls.items():
+                print(f"{key}: {value}")
+        if user_debug:
+            traceback.print_exc()
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         try:
@@ -740,6 +759,41 @@ async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser("~/.ollama/logs/server.log")
     return FileResponse(filepath)
 
+#### BASIC ENDPOINTS #### 
+
+@router.get("/test")
+async def test_endpoint(request: Request): 
+    return {"route": request.url.path}
+
+@app.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
+async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
+    global llm_model_list
+    healthy_endpoints = []
+    unhealthy_endpoints = []
+    if llm_model_list:
+        for model_name in llm_model_list:
+            try:
+                if model is None or model == model_name["litellm_params"]["model"]: # if model specified, just call that one.
+                    litellm_params = model_name["litellm_params"]
+                    if litellm_params["model"] not in litellm.all_embedding_models: # filter out embedding models
+                        litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+                        litellm.completion(**litellm_params)
+                        cleaned_params = {}
+                        for key in litellm_params:
+                            if key != "api_key" and key != "messages":
+                                cleaned_params[key] = litellm_params[key]
+                        healthy_endpoints.append(cleaned_params)
+            except:
+                cleaned_params = {}
+                for key in litellm_params:
+                    if key != "api_key" and key != "messages":
+                        cleaned_params[key] = litellm_params[key]
+                unhealthy_endpoints.append(cleaned_params)
+                pass
+    return {
+        "healthy_endpoints": healthy_endpoints,
+        "unhealthy_endpoints": unhealthy_endpoints
+    }
 
 @router.get("/")
 async def home(request: Request):
