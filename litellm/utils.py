@@ -581,9 +581,12 @@ class Logging:
             curl_command += f"{api_base} \\\n"
             curl_command += f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
             curl_command += f"-d '{str(data)}'\n"
-            if api_base == "":
+            if additional_args.get("request_str", None) is not None:
+                # print the sagemaker / bedrock client request
+                curl_command = "\nRequest Sent from LiteLLM:\n"
+                curl_command += additional_args.get("request_str", None)
+            elif api_base == "":
                 curl_command = self.model_call_details
-
             print_verbose(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -1204,7 +1207,8 @@ def client(original_function):
                 elif kwargs.get("messages", None):
                     messages = kwargs["messages"]
                 ### PRE-CALL RULES ### 
-                rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
+                if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], dict) and "content" in messages[0]:
+                    rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
@@ -2218,7 +2222,7 @@ def get_optional_params(  # use the openai defaults
             if stream: 
                 optional_params["stream"] = stream
         elif "cohere" in model: # cohere models on bedrock
-            supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
+            supported_params = ["stream", "temperature", "max_tokens"]
             _check_valid_arg(supported_params=supported_params)
             # handle cohere params
             if stream:
@@ -2740,7 +2744,6 @@ def json_schema_type(python_type_name: str):
 
     return python_to_json_schema_types.get(python_type_name, "string")
 
-
 def function_to_dict(input_function):  # noqa: C901
     """Using type hints and numpy-styled docstring,
     produce a dictionnary usable for OpenAI function calling
@@ -3141,7 +3144,7 @@ def set_callbacks(callback_list, function_id=None):
     except Exception as e:
         raise e
 
-
+# NOTE: DEPRECATING this in favor of using failure_handler() in Logging:
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
@@ -3478,6 +3481,74 @@ def check_valid_key(model: str, api_key: str):
     except Exception as e:
         return False
 
+def _should_retry(status_code: int): 
+    """
+    Reimplementation of openai's should retry logic, since that one can't be imported. 
+    https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L639
+    """
+    # If the server explicitly says whether or not to retry, obey.
+    # Retry on request timeouts.
+    if status_code == 408:
+        return True
+
+    # Retry on lock timeouts.
+    if status_code == 409:
+        return True
+
+    # Retry on rate limits.
+    if status_code == 429:
+        return True
+
+    # Retry internal errors.
+    if status_code >= 500:
+        return True
+
+    return False
+
+def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None):
+    """
+    Reimplementation of openai's calculate retry after, since that one can't be imported.
+    https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
+    """
+    try:
+        import email # openai import
+        # About the Retry-After header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After
+        #
+        # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
+        # details.
+        if response_headers is not None:
+            retry_header = response_headers.get("retry-after")
+            try:
+                retry_after = int(retry_header)
+            except Exception:
+                retry_date_tuple = email.utils.parsedate_tz(retry_header)
+                if retry_date_tuple is None:
+                    retry_after = -1
+                else:
+                    retry_date = email.utils.mktime_tz(retry_date_tuple)
+                    retry_after = int(retry_date - time.time())
+        else:
+            retry_after = -1
+
+    except Exception:
+        retry_after = -1
+    
+    # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
+    if 0 < retry_after <= 60:
+        return retry_after
+
+    initial_retry_delay = 0.5
+    max_retry_delay = 8.0
+    nb_retries = max_retries - remaining_retries
+
+    # Apply exponential backoff, but not more than the max.
+    sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
+
+    # Apply some jitter, plus-or-minus half a second.
+    jitter = 1 - 0.25 * random.random()
+    timeout = sleep_seconds * jitter
+    return timeout if timeout >= 0 else 0
+
 # integration helper function
 def modify_integration(integration_name, integration_params):
     global supabaseClient
@@ -3724,6 +3795,14 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
+                else:
+                    # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
+                    raise APIConnectionError(
+                        __cause__=original_exception.__cause__,
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        request=original_exception.request
+                    )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
                     if "prompt is too long" in original_exception.message or "prompt: length" in original_exception.message:
@@ -4510,6 +4589,14 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
+                else:
+                    # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
+                    raise APIConnectionError(
+                        __cause__=original_exception.__cause__,
+                        llm_provider="azure",
+                        model=model,
+                        request=original_exception.request
+                    )
         if "BadRequestError.__init__() missing 1 required positional argument: 'param'" in str(original_exception): # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
@@ -4919,7 +5006,6 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
 
-
             return {
                 "text": text, 
                 "is_finished": is_finished, 
@@ -5159,7 +5245,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            
+
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
@@ -5182,11 +5268,14 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
-                try:
-                    delta = dict(original_chunk.choices[0].delta)
-                    model_response.choices[0].delta = Delta(**delta)
-                except:
-                    model_response.choices[0].delta = Delta()
+                if len(original_chunk.choices) > 0:
+                    try:
+                        delta = dict(original_chunk.choices[0].delta)
+                        model_response.choices[0].delta = Delta(**delta)
+                    except Exception as e:
+                        model_response.choices[0].delta = Delta()
+                else: 
+                    return
                 model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
@@ -5218,10 +5307,8 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 
-                print_verbose(f"chunk in __next__: {chunk}")
                 if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
-                    print_verbose(f"response in __next__: {response}")
                     if response is not None:
                         return response
         except StopIteration:

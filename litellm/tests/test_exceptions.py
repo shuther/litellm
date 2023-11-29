@@ -227,10 +227,10 @@ async def asynctest_completion_azure_exception():
         print("exception", e)
         pytest.fail(f"Error occurred: {e}")
 
-import asyncio
-asyncio.run(
-    asynctest_completion_azure_exception()
-)
+# import asyncio
+# asyncio.run(
+#     asynctest_completion_azure_exception()
+# )
 
 
 def test_completion_openai_exception():
@@ -263,15 +263,16 @@ def test_completion_openai_exception():
 
 
 
-# test_invalid_request_error(model="command-nightly")
-# Test 3: Rate Limit Errors
+# # test_invalid_request_error(model="command-nightly")
+# # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:
 #         sample_text = "how does a court case get to the Supreme Court?"
 #         messages = [{ "content": sample_text,"role": "user"}]
 #         print(f"model: {model}")
 #         response = completion(model=model, messages=messages)
-#     except RateLimitError:
+#     except RateLimitError as e:
+#         print(f"headers: {e.response.headers}")
 #         return True
 #     # except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
 #     #     return True
@@ -282,7 +283,7 @@ def test_completion_openai_exception():
 #     return False
 # # Repeat each model 500 times
 # # extended_models = [model for model in models for _ in range(250)]
-# extended_models = ["gpt-3.5-turbo-instruct" for _ in range(250)]
+# extended_models = ["azure/chatgpt-v-2" for _ in range(250)]
 
 # def worker(model):
 #     return test_model_call(model)

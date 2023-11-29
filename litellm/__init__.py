@@ -70,11 +70,11 @@ allowed_fails: int = 0
 def get_model_cost_map(url: str):
     print(f"Model cost loaded from: {url}")
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an exception if request is unsuccessful
-        content = response.json()
-        return content
-    except:
+        with requests.get(url, timeout=5) as response:  # set a 5 second timeout for the get request
+            response.raise_for_status()                 # Raise an exception if the request is unsuccessful
+            content = response.json()
+            return content
+    except Exception as e:
         import importlib.resources
         import json
 
@@ -269,6 +269,8 @@ from .utils import (
     register_model,
     encode,
     decode,
+    _calculate_retry_after,
+    _should_retry
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig

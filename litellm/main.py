@@ -162,7 +162,8 @@ async def acompletion(*args, **kwargs):
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO COMPLETION ### 
     kwargs["acompletion"] = True
-    try: 
+    custom_llm_provider = None
+    try:
         # Use a partial function to pass your keyword arguments
         func = partial(completion, *args, **kwargs)
 
@@ -185,7 +186,7 @@ async def acompletion(*args, **kwargs):
                 response = completion(*args, **kwargs)
             else:
                 # Await normally
-                init_response = completion(*args, **kwargs)
+                init_response = await loop.run_in_executor(None, func_with_context)
                 if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
                     response = init_response
                 elif asyncio.iscoroutine(init_response):
@@ -198,6 +199,7 @@ async def acompletion(*args, **kwargs):
         else: 
             return response
     except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
@@ -344,9 +346,10 @@ def completion(
     bos_token = kwargs.get("bos_token", None)
     eos_token = kwargs.get("eos_token", None)
     acompletion = kwargs.get("acompletion", False)
+    client = kwargs.get("client", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -466,6 +469,7 @@ def completion(
                 api_key or
                 litellm.api_key or
                 litellm.azure_key or
+                get_secret("AZURE_OPENAI_API_KEY") or
                 get_secret("AZURE_API_KEY")
             )
 
@@ -502,7 +506,8 @@ def completion(
                 logger_fn=logger_fn,
                 logging_obj=logging, 
                 acompletion=acompletion,
-                timeout=timeout
+                timeout=timeout,
+                client=client # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
             ## LOGGING
@@ -572,7 +577,8 @@ def completion(
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     timeout=timeout,
-                    custom_prompt_dict=custom_prompt_dict
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client # pass AsyncOpenAI, OpenAI client
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -1719,11 +1725,12 @@ def embedding(
     - exception_type: If an exception occurs during the API call.
     """
     azure = kwargs.get("azure", None)
+    client = kwargs.pop("client", None)
+
     optional_params = {}
     for param in kwargs:
         if param != "metadata":                     # filter out metadata from optional_params
             optional_params[param] = kwargs[param]
-
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     try:
         response = None
@@ -1768,6 +1775,7 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
+                client=client
             )
         elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
@@ -1801,7 +1809,8 @@ def embedding(
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=optional_params
+                optional_params=optional_params,
+                client=client
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
@@ -2113,8 +2122,38 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     # Extract the "content" strings from the nested dictionaries within "choices"
     content_list = []
     combined_content = ""
+    combined_arguments = ""
 
-    if "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
+    if "tool_calls" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None:
+        argument_list = []
+        delta = chunks[0]["choices"][0]["delta"]
+        message = response["choices"][0]["message"]
+        message["tool_calls"] = []
+        id = None
+        name = None
+        type = None
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                tool_calls = delta.get("tool_calls", "")
+                # Check if a tool call is present
+                if tool_calls and tool_calls[0].function is not None:
+                    if tool_calls[0].id:
+                        id = tool_calls[0].id
+                    if tool_calls[0].function.arguments:
+                        # Now, tool_calls is expected to be a dictionary
+                        arguments = tool_calls[0].function.arguments
+                        argument_list.append(arguments)
+                    if tool_calls[0].function.name:
+                        name = tool_calls[0].function.name
+                    if tool_calls[0].type:
+                        type = tool_calls[0].type
+
+        combined_arguments = "".join(argument_list)
+        response["choices"][0]["message"]["content"] = None
+        response["choices"][0]["message"]["tool_calls"] = [{"id": id, "function": {"arguments": combined_arguments, "name": name}, "type": type}]
+    elif "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -2149,16 +2188,19 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
                     continue # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
 
-        # Combine the "content" strings into a single string
+        # Combine the "content" strings into a single string || combine the 'function' strings into a single string
         combined_content = "".join(content_list)
 
         # Update the "content" field within the response dictionary
         response["choices"][0]["message"]["content"] = combined_content
 
-
+    if len(combined_content) > 0:
+        completion_output = combined_content
+    elif len(combined_arguments) > 0:
+        completion_output = combined_arguments
     # # Update usage information if needed
     if messages:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
-    response["usage"]["completion_tokens"] = token_counter(model=model, text=combined_content)
+    response["usage"]["completion_tokens"] = token_counter(model=model, text=completion_output)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())
