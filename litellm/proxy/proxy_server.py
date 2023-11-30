@@ -540,7 +540,7 @@ def model_list():
         all_models = list(set(all_models + [m["model_name"] for m in llm_model_list]))
     if user_model is not None:
         all_models += [user_model]
-    print(f"all_models: {all_models}")
+    print_verbose(f"all_models: {all_models}")
     ### CHECK OLLAMA MODELS ### 
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
@@ -611,7 +611,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             data = ast.literal_eval(body_str)
         except: 
             data = json.loads(body_str)
-        print(f"receiving data: {data}")
+        print_verbose(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -654,7 +654,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
 async def embeddings(request: Request):
     try:
         data = await request.json()
-        print(f"data: {data}")
+        print_verbose(f"data: {data}")
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
@@ -765,7 +765,7 @@ async def retrieve_server_log(request: Request):
 async def test_endpoint(request: Request): 
     return {"route": request.url.path}
 
-@app.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
+@router.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
     healthy_endpoints = []
@@ -775,15 +775,18 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
             try:
                 if model is None or model == model_name["litellm_params"]["model"]: # if model specified, just call that one.
                     litellm_params = model_name["litellm_params"]
-                    if litellm_params["model"] not in litellm.all_embedding_models: # filter out embedding models
+                    model_name = litellm.utils.remove_model_id(litellm_params["model"]) # removes, ids set by litellm.router
+                    if model_name not in litellm.all_embedding_models: # filter out embedding models
                         litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+                        litellm_params["model"] = model_name
                         litellm.completion(**litellm_params)
                         cleaned_params = {}
                         for key in litellm_params:
                             if key != "api_key" and key != "messages":
                                 cleaned_params[key] = litellm_params[key]
                         healthy_endpoints.append(cleaned_params)
-            except:
+            except Exception as e:
+                print("Got Exception", e)
                 cleaned_params = {}
                 for key in litellm_params:
                     if key != "api_key" and key != "messages":
@@ -799,7 +802,7 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
 async def home(request: Request):
     return "LiteLLM: RUNNING"
 
-@app.get("/routes")
+@router.get("/routes")
 async def get_routes():
     """
     Get a list of available routes in the FastAPI application.

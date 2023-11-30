@@ -133,6 +133,7 @@ class AzureChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
+            max_retries = data.pop("max_retries", 2)
             if acompletion is True: 
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
@@ -141,7 +142,6 @@ class AzureChatCompletion(BaseLLM):
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
             else:
-                max_retries = data.pop("max_retries", 2)
                 if not isinstance(max_retries, int): 
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
@@ -221,7 +221,7 @@ class AzureChatCompletion(BaseLLM):
                   timeout: Any,
                   azure_ad_token: Optional[str]=None, 
                   client=None,
-    ):
+    ): 
         max_retries = data.pop("max_retries", 2)
         if not isinstance(max_retries, int): 
             raise AzureOpenAIError(status_code=422, message="max retries must be an int")
@@ -244,8 +244,7 @@ class AzureChatCompletion(BaseLLM):
             azure_client = client
         response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
-        for transformed_chunk in streamwrapper:
-            yield transformed_chunk
+        return streamwrapper
 
     async def async_streaming(self, 
                           logging_obj,
@@ -280,6 +279,24 @@ class AzureChatCompletion(BaseLLM):
         async for transformed_chunk in streamwrapper:
             yield transformed_chunk
 
+    async def aembedding(
+        self, 
+        data: dict, 
+        model_response: ModelResponse, 
+        azure_client_params: dict,
+        client=None,
+    ): 
+        response = None
+        try: 
+            if client is None:
+                openai_aclient = AsyncAzureOpenAI(**azure_client_params)
+            else:
+                openai_aclient = client
+            response = await openai_aclient.embeddings.create(**data)
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+        except Exception as e:
+            raise e
+
     def embedding(self,
                 model: str,
                 input: list,
@@ -291,7 +308,8 @@ class AzureChatCompletion(BaseLLM):
                 model_response=None,
                 optional_params=None,
                 azure_ad_token: Optional[str]=None,
-                client = None
+                client = None,
+                aembedding=None,
                 ):
         super().embedding()
         exception_mapping_worked = False
@@ -320,6 +338,9 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
+            if aembedding == True:
+                response =  self.aembedding(data=data, model_response=model_response, azure_client_params=azure_client_params)
+                return response
             if client is None:
                 azure_client = AzureOpenAI(**azure_client_params) # type: ignore
             else:
@@ -347,7 +368,7 @@ class AzureChatCompletion(BaseLLM):
                 )
 
 
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding") # type: ignore
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e

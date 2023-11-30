@@ -1,5 +1,5 @@
 #### What this tests ####
-#    This tests calling batch_completions by running 100 messages together
+#This tests litellm router
 
 import sys, os, time
 import traceback, asyncio
@@ -10,6 +10,7 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -297,4 +298,35 @@ def test_aembedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_aembedding_on_router()
+# test_aembedding_on_router()
+
+
+def test_azure_aembedding_on_router():
+	litellm.set_verbose = True
+	try:
+		model_list = [
+			{
+				"model_name": "text-embedding-ada-002",
+				"litellm_params": {
+					"model": "azure/azure-embedding-model",
+					"api_key":os.environ['AZURE_API_KEY'],
+					"api_base": os.environ['AZURE_API_BASE']
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			},
+		]
+
+		async def embedding_call():
+			router = Router(model_list=model_list)
+			response = await router.aembedding(
+				model="text-embedding-ada-002",
+				input=["good morning from litellm"]
+			)
+			print(response)
+			router.reset()
+		asyncio.run(embedding_call())
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+# test_azure_aembedding_on_router()

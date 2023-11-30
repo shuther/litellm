@@ -104,6 +104,13 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "azure/gpt-4-1106-preview": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
     "azure/gpt-4-32k": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.00006,
@@ -811,10 +818,31 @@
         "litellm_provider": "deepinfra",
         "mode": "chat"
       },
-      "perplexity/codellama-34b-instruct": { 
+      "perplexity/pplx-7b-chat": { 
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-70b-chat": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
         "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-7b-online": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.0005, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-70b-online": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.0005, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
