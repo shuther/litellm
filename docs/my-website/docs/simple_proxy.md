@@ -7,8 +7,8 @@ import TabItem from '@theme/TabItem';
 LiteLLM Server manages:
 
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* Load balancing - between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) **LiteLLM proxy can handle 1k+ requests/second during load tests**
 * Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
-* Load balancing - Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
 
 [**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
@@ -237,169 +237,27 @@ $ litellm --model command-nightly
 
 
 ## Using with OpenAI compatible projects
-LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
+Set `base_url` to the LiteLLM Proxy server
 
 <Tabs>
-
-<TabItem value="flask evals" label="FLASK Evals">
-FLASK - Fine-grained Language Model Evaluation 
-Use litellm to evaluate any LLM on FLASK https://github.com/kaistAI/FLASK 
-
-**Step 1: Start the local proxy**
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-**Step 2: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-**Step 3 Run with FLASK** 
-
-```shell
-git clone https://github.com/kaistAI/FLASK
-```
-```shell
-cd FLASK/gpt_review
-```
-
-Run the eval 
-```shell
-python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
-```
-</TabItem>
-
-<TabItem value="FastEval" label="Fast Eval">
-
-**Step 1: Start the local proxy**
-see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-**Step 2: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-Set this to anything since the proxy has the credentials
-```shell
-export OPENAI_API_KEY=anything
-```
-
-**Step 3 Run with FastEval** 
-
-**Clone FastEval**
-```shell
-# Clone this repository, make it the current working directory
-git clone --depth 1 https://github.com/FastEval/FastEval.git
-cd FastEval
-```
-
-**Set API Base on FastEval**
-
-On FastEval make the following **2 line code change** to set `OPENAI_API_BASE`
-
-https://github.com/FastEval/FastEval/pull/90/files
-```python
-try:
-    api_base = os.environ["OPENAI_API_BASE"] #changed: read api base from .env
-    if api_base == None:
-        api_base = "https://api.openai.com/v1"
-    response = await self.reply_two_attempts_with_different_max_new_tokens(
-        conversation=conversation,
-        api_base=api_base, # #changed: pass api_base
-        api_key=os.environ["OPENAI_API_KEY"],
-        temperature=temperature,
-        max_new_tokens=max_new_tokens,
-```
-
-**Run FastEval**
-Set `-b` to the benchmark you want to run. Possible values are `mt-bench`, `human-eval-plus`, `ds1000`, `cot`, `cot/gsm8k`, `cot/math`, `cot/bbh`, `cot/mmlu` and `custom-test-data`
-
-Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to change
-`-t` will remain openai
-`-m` will remain gpt-3.5
-
-```shell
-./fasteval -b human-eval-plus -t openai -m gpt-3.5-turbo
-```
-</TabItem>
-<TabItem value="mlflow" label="ML Flow Eval">
-
-MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
-
-#### Pre Requisites
-```shell
-pip install litellm
-```
-```shell
-pip install mlflow
-```
-
-#### Step 1: Start LiteLLM Proxy on the CLI
-LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
-
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-
-#INFO: Proxy running on http://0.0.0.0:8000
-```
-
-#### Step 2: Run ML Flow
-Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
-
-```python
-openai.api_base = "http://0.0.0.0:8000"
-```
+<TabItem value="openai" label="OpenAI v1.0.0+">
 
 ```python
 import openai
-import pandas as pd
-openai.api_key = "anything"             # this can be anything, we set the key on the proxy
-openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
-
-
-import mlflow
-eval_data = pd.DataFrame(
-    {
-        "inputs": [
-            "What is the largest country",
-            "What is the weather in sf?",
-        ],
-        "ground_truth": [
-            "India is a large country",
-            "It's cold in SF today"
-        ],
-    }
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
 )
 
-with mlflow.start_run() as run:
-    system_prompt = "Answer the following question in two sentences"
-    logged_model_info = mlflow.openai.log_model(
-        model="gpt-3.5",
-        task=openai.ChatCompletion,
-        artifact_path="model",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "{question}"},
-        ],
-    )
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
 
-    # Use predefined question-answering metrics to evaluate our model.
-    results = mlflow.evaluate(
-        logged_model_info.model_uri,
-        eval_data,
-        targets="ground_truth",
-        model_type="question-answering",
-    )
-    print(f"See aggregated evaluation results below: \n{results.metrics}")
-
-    # Evaluation result for each data record is available in `results.tables`.
-    eval_table = results.tables["eval_results_table"]
-    print(f"See evaluation table below: \n{eval_table}")
-
+print(response)
 
 ```
 </TabItem>
@@ -501,6 +359,30 @@ result = experts(query='How can I be more productive?')
 print(result)
 ```
 </TabItem>
+<TabItem value="librechat" label="LibreChat">
+
+#### 1. Clone the repo
+
+```shell
+git clone https://github.com/danny-avila/LibreChat.git
+```
+
+
+#### 2. Modify `docker-compose.yml`
+```yaml
+OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+```
+
+#### 3. Save fake OpenAI key in `.env`
+```env
+OPENAI_API_KEY=sk-1234
+```
+
+#### 4. Run LibreChat: 
+```shell
+docker compose up
+```
+</TabItem>
 </Tabs>
 
 ## Proxy Configs
@@ -516,14 +398,24 @@ The Config allows you to set the following params
 #### Example Config
 ```yaml
 model_list:
-  - model_name: zephyr-alpha
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
-      api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
+  - model_name: gpt-3.5-turbo
     litellm_params:
-      model: huggingface/HuggingFaceH4/zephyr-7b-beta
-      api_base: https://<my-hosted-endpoint>
+      model: azure/gpt-turbo-small-eu
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: 
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: 
+      rpm: 6
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-large
+      api_base: https://openai-france-1234.openai.azure.com/
+      api_key: 
+      rpm: 1440
 
 litellm_settings:
   drop_params: True
@@ -590,6 +482,141 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
+
+### Load Balancing - Multiple Instances of 1 model
+Use this config to load balance between multiple instances of the same model. The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**
+
+#### Example config
+requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-eu
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: 
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: 
+      rpm: 6
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-large
+      api_base: https://openai-france-1234.openai.azure.com/
+      api_key: 
+      rpm: 1440
+```
+
+#### Step 2: Start Proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Step 3: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+### Fallbacks + Cooldowns + Retries + Timeouts 
+
+If a call fails after num_retries, fall back to another model group.
+
+If the error is a context window exceeded error, fall back to a larger model group (if given).
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
+**Set via config**
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: gpt-3.5-turbo
+        api_key: <my-openai-key>
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: <my-openai-key>
+
+litellm_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+```
+
+**Set dynamically**
+
+```bash
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "num_retries": 2,
+      "request_timeout": 10
+    }
+'
+```
+
+### Config for Embedding Models - xorbitsai/inference
+
+Here's how you can use multiple llms with one proxy `config.yaml`. 
+Here is how [LiteLLM calls OpenAI Compatible Embedding models](https://docs.litellm.ai/docs/embedding/supported_embedding#openai-compatible-embedding-models)
+
+#### Config
+```yaml
+model_list:
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8000/
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8001/
+```
+
+Run the proxy using this config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
 
 ### Managing Auth - Virtual Keys
 
@@ -783,137 +810,6 @@ model_list:
 [**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
-
-### Load Balancing - Multiple Instances of 1 model
-
-If you have multiple instances of the same model,
-
-in the `config.yaml` just add all of them with the same 'model_name', and the proxy will handle routing requests (using LiteLLM's Router). 
-
-In the config below requests with `model=zephyr-beta` will be routed across multiple instances of `HuggingFaceH4/zephyr-7b-beta`
-
-```yaml
-model_list:
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8002
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8003
-```
-
-#### Step 2: Start Proxy with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-#### Step 3: Use proxy
-Curl Command
-```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "zephyr-beta",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ],
-    }
-'
-```
-
-### Fallbacks + Cooldowns + Retries + Timeouts 
-
-If a call fails after num_retries, fall back to another model group.
-
-If the error is a context window exceeded error, fall back to a larger model group (if given).
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
-
-**Set via config**
-```yaml
-model_list:
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8002
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8003
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-        model: gpt-3.5-turbo
-        api_key: <my-openai-key>
-  - model_name: gpt-3.5-turbo-16k
-    litellm_params:
-        model: gpt-3.5-turbo-16k
-        api_key: <my-openai-key>
-
-litellm_settings:
-  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
-  request_timeout: 10 # raise Timeout error if call takes longer than 10s
-  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
-  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
-```
-
-**Set dynamically**
-
-```bash
-curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "zephyr-beta",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ],
-      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
-      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
-      "num_retries": 2,
-      "request_timeout": 10
-    }
-'
-```
-
-### Config for Embedding Models - xorbitsai/inference
-
-Here's how you can use multiple llms with one proxy `config.yaml`. 
-Here is how [LiteLLM calls OpenAI Compatible Embedding models](https://docs.litellm.ai/docs/embedding/supported_embedding#openai-compatible-embedding-models)
-
-#### Config
-```yaml
-model_list:
-  - model_name: custom_embedding_model
-    litellm_params:
-      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8000/
-  - model_name: custom_embedding_model
-    litellm_params:
-      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8001/
-```
-
-Run the proxy using this config
-```shell
-$ litellm --config /path/to/config.yaml
-```
 
 ### Config for setting Model Aliases
 

@@ -7,15 +7,14 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import copy
-import datetime
-import json
-import os
-import subprocess
-import sys
-import threading
-import time
-import traceback
+import sys, re
+import dotenv, json, traceback, threading
+import subprocess, os
+import litellm, openai
+import itertools
+import random, uuid, requests
+import datetime, time
+import tiktoken
 import uuid
 import dotenv
 import httpx
@@ -1312,7 +1311,9 @@ def client(original_function):
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
                 return result
-            
+            elif "aembedding" in kwargs and kwargs["aembedding"] == True:
+                return result
+
             ### POST-CALL RULES ### 
             post_call_processing(original_response=result, model=model)
 
@@ -1622,6 +1623,7 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
     if text == None:
         if messages is not None:
+            print_verbose(f"token_counter messages received: {messages}")
             text = "".join([message["content"] for message in messages])
         else:
             raise ValueError("text and messages cannot both be None")
@@ -1799,8 +1801,10 @@ def register_model(model_cost: Union[str, dict]):
 
     for key, value in loaded_model_cost.items():
         ## override / add new keys to the existing model cost dictionary
-        litellm.model_cost[key] = loaded_model_cost[key]
-
+        if key in litellm.model_cost:
+            for k,v in loaded_model_cost[key].items():
+                litellm.model_cost[key][k] = v
+        # litellm.model_cost[key] = loaded_model_cost[key]
         # add new model names to provider lists
         if value.get('litellm_provider') == 'openai':
             if key not in litellm.open_ai_chat_completion_models:
@@ -1953,7 +1957,25 @@ def get_optional_params(  # use the openai defaults
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(status_code=500, message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.")
-    ## raise exception if provider doesn't support passed in param 
+
+    def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
+        """
+        filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
+        """
+        filtered_stop = None
+        if "stop" in supported_params and litellm.drop_params:
+            if provider == "bedrock" and "amazon" in model:
+                filtered_stop = []
+                if isinstance(stop, list):
+                    for s in stop:
+                        if re.match(r'^(\|+|User:)$', s):
+                            filtered_stop.append(s)
+        if filtered_stop is not None:
+            supported_params["stop"] = filtered_stop
+
+        return supported_params
+
+    ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in 
         supported_params = ["stream", "stop", "temperature", "top_p", "max_tokens"]
@@ -2166,7 +2188,7 @@ def get_optional_params(  # use the openai defaults
             _check_valid_arg(supported_params=supported_params)
     elif custom_llm_provider == "bedrock":
         if "ai21" in model:
-            supported_params = ["max_tokens", "temperature", "stop", "top_p", "stream"]
+            supported_params = ["max_tokens", "temperature", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
@@ -2174,8 +2196,6 @@ def get_optional_params(  # use the openai defaults
                 optional_params["maxTokens"] = max_tokens
             if temperature is not None:
                 optional_params["temperature"] = temperature
-            if stop is not None:
-                optional_params["stop_sequences"] = stop
             if top_p is not None:
                 optional_params["topP"] = top_p
             if stream: 
@@ -2204,7 +2224,8 @@ def get_optional_params(  # use the openai defaults
             if temperature is not None:
                 optional_params["temperature"] = temperature
             if stop is not None:
-                optional_params["stopSequences"] = stop
+                filtered_stop = _map_and_modify_arg({"stop": stop}, provider="bedrock", model=model)
+                optional_params["stopSequences"] = filtered_stop["stop"]
             if top_p is not None:
                 optional_params["topP"] = top_p
             if stream: 
@@ -2231,18 +2252,6 @@ def get_optional_params(  # use the openai defaults
                 optional_params["temperature"] = temperature
             if max_tokens is not None:
                 optional_params["max_tokens"] = max_tokens
-            if n is not None:
-                optional_params["num_generations"] = n
-            if logit_bias is not None:
-                optional_params["logit_bias"] = logit_bias
-            if top_p is not None:
-                optional_params["p"] = top_p
-            if frequency_penalty is not None:
-                optional_params["frequency_penalty"] = frequency_penalty
-            if presence_penalty is not None:
-                optional_params["presence_penalty"] = presence_penalty
-            if stop is not None:
-                optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "aleph_alpha":
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
@@ -3294,7 +3303,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
             if response_object is None or model_response_object is None:
                 raise Exception("Error in response object format")
             choice_list=[]
-            for idx, choice in enumerate(response_object["choices"]): 
+            for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["message"].get("content", None),
                     role=choice["message"]["role"],
@@ -3336,16 +3345,8 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 if "object" in response_object:
                     model_response_object.object = response_object["object"]
 
-                embedding_data = []
-                for idx, embedding in enumerate(response_object["data"]):
-                    embedding_obj = Embedding(
-                        embedding=embedding.get("embedding", None),
-                        index = embedding.get("index", idx),
-                        object=embedding.get("object", "embedding")
-                    )
-                    embedding_data.append(embedding_obj)
 
-                model_response_object.data = embedding_data
+                model_response_object.data = response_object["data"]
 
                 if "usage" in response_object and response_object["usage"] is not None:
                     model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
@@ -5075,14 +5076,22 @@ class CustomStreamWrapper:
             return ""
 
     def handle_bedrock_stream(self, chunk):
-        chunk = chunk.get('chunk')
-        if chunk:
+        if hasattr(chunk, "get"):
+            chunk = chunk.get('chunk')
             chunk_data = json.loads(chunk.get('bytes').decode())
-            text = "" 
+        else:
+            chunk_data = json.loads(chunk.decode())
+        if chunk_data:
+            text = ""
             is_finished = False
             finish_reason = ""
             if "outputText" in chunk_data: 
                 text = chunk_data['outputText']
+            # ai21 mapping
+            if "ai21" in self.model: # fake ai21 streaming
+                text = chunk_data.get('completions')[0].get('data').get('text')
+                is_finished = True
+                finish_reason = "stop"
             # anthropic mapping
             elif "completion" in  chunk_data:
                 text = chunk_data['completion'] # bedrock.anthropic
@@ -5186,10 +5195,13 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "bedrock":
+                if self.sent_last_chunk:
+                    raise StopIteration
                 response_obj = self.handle_bedrock_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                    self.sent_last_chunk = True
             elif self.custom_llm_provider == "sagemaker":
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
@@ -5264,28 +5276,31 @@ class CustomStreamWrapper:
                     return model_response
                 else: 
                     return 
+            elif model_response.choices[0].finish_reason:
+                model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
+                # LOGGING
+                threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
+                return model_response
             elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 if len(original_chunk.choices) > 0:
-                    try:
-                        delta = dict(original_chunk.choices[0].delta)
-                        model_response.choices[0].delta = Delta(**delta)
-                    except Exception as e:
-                        model_response.choices[0].delta = Delta()
-                else: 
+                    if original_chunk.choices[0].delta.function_call is not None or original_chunk.choices[0].delta.tool_calls is not None:
+                        try:
+                            delta = dict(original_chunk.choices[0].delta)
+                            model_response.choices[0].delta = Delta(**delta)
+                        except Exception as e:
+                            model_response.choices[0].delta = Delta()
+                    else:
+                        return
+                else:
                     return
                 model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
-                return model_response
-            elif model_response.choices[0].finish_reason:
-                model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
-                # LOGGING
-                threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                 return model_response
             else: 
                 return
@@ -5302,11 +5317,10 @@ class CustomStreamWrapper:
     def __next__(self):
         try:
             while True: 
-                if isinstance(self.completion_stream, str):
+                if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-                
                 if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     if response is not None:
@@ -5846,3 +5860,12 @@ def transform_logprobs(hf_response):
         transformed_logprobs = token_info
 
     return transformed_logprobs
+
+# used in LiteLLM Router
+def remove_model_id(original_model_string):
+    # Find the index of "ModelID" in the string
+    index_of_model_id = original_model_string.find("-ModelID")
+    # Remove everything after "-ModelID" if it exists
+    if index_of_model_id != -1:
+        return original_model_string[:index_of_model_id]
+    return original_model_string

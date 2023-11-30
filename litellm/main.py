@@ -339,7 +339,10 @@ def completion(
     num_retries = kwargs.get("num_retries", None) ## deprecated
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
-    ### CUSTOM PROMPT TEMPLATE ### 
+    ### CUSTOM MODEL COST ###
+    input_cost_per_token = kwargs.get("input_cost_per_token", None)
+    output_cost_per_token = kwargs.get("output_cost_per_token", None)
+    ### CUSTOM PROMPT TEMPLATE ###
     initial_prompt_value = kwargs.get("initial_prompt_value", None)
     roles = kwargs.get("roles", None)
     final_prompt_value = kwargs.get("final_prompt_value", None)
@@ -349,7 +352,7 @@ def completion(
     client = kwargs.get("client", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -377,13 +380,23 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
-
         if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
             custom_llm_provider="azure"
         if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+
+        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
+        if input_cost_per_token is not None and output_cost_per_token is not None:
+            litellm.register_model({
+                model: {
+                    "input_cost_per_token": input_cost_per_token,
+                    "output_cost_per_token": output_cost_per_token,
+                    "litellm_provider": custom_llm_provider
+                }
+            })
+        ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {} # type: ignore
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
             custom_prompt_dict = {model: {}}
@@ -693,6 +706,11 @@ def completion(
                 or "https://api.replicate.com/v1"
             )
 
+            custom_prompt_dict = (
+                custom_prompt_dict
+                or litellm.custom_prompt_dict
+            )
+
             model_response = replicate.completion(
                 model=model,
                 messages=messages,
@@ -705,6 +723,7 @@ def completion(
                 encoding=encoding, # for calculating input/output tokens
                 api_key=replicate_key,
                 logging_obj=logging, 
+                custom_prompt_dict=custom_prompt_dict
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
@@ -1194,9 +1213,14 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
-                )
+                if "ai21" in model:
+                    response = CustomStreamWrapper(
+                        model_response, model, custom_llm_provider="bedrock", logging_obj=logging
+                    )
+                else:
+                    response = CustomStreamWrapper(
+                        iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
+                    )
                 return response
 
             ## RESPONSE OBJECT
@@ -1266,6 +1290,7 @@ def completion(
                     response_string+=chunk['content']
             
             ## RESPONSE OBJECT
+            model_response["choices"][0]["finish_reason"] = "stop"
             model_response["choices"][0]["message"]["content"] = response_string
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + model
@@ -1310,11 +1335,12 @@ def completion(
             or model in litellm.petals_models
         ):
             api_base = (
-                litellm.api_base or
-                api_base 
+                api_base or
+                litellm.api_base
             )
 
             custom_llm_provider = "petals"
+            stream = optional_params.pop("stream", False)
             model_response = petals.completion(
                 model=model,
                 messages=messages,
@@ -1671,17 +1697,43 @@ async def aembedding(*args, **kwargs):
     - `response` (Any): The response returned by the `embedding` function.
     """
     loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Embedding ###
+    kwargs["aembedding"] = True
+    custom_llm_provider = None
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(embedding, *args, **kwargs)
 
-    # Use a partial function to pass your keyword arguments
-    func = partial(embedding, *args, **kwargs)
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
 
-    # Add the context to the function
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
-    # Call the synchronous function using run_in_executor
-    response =  await loop.run_in_executor(None, func_with_context)
-    return response
+        if (custom_llm_provider == "openai"
+            or custom_llm_provider == "azure"
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all.
+            # Await normally
+            init_response = await loop.run_in_executor(None, func_with_context)
+            if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO
+                response = init_response
+            elif asyncio.iscoroutine(init_response):
+                response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        return response
+    except Exception as e:
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
 
 @client
 def embedding(
@@ -1726,6 +1778,9 @@ def embedding(
     """
     azure = kwargs.get("azure", None)
     client = kwargs.pop("client", None)
+    rpm = kwargs.pop("rpm", None)
+    tpm = kwargs.pop("tpm", None)
+    aembedding = kwargs.pop("aembedding", None)
 
     optional_params = {}
     for param in kwargs:
@@ -1775,7 +1830,8 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
-                client=client
+                client=client,
+                aembedding=aembedding
             )
         elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
@@ -1810,7 +1866,8 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
-                client=client
+                client=client,
+                aembedding=aembedding,
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
@@ -2132,6 +2189,11 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
         id = None
         name = None
         type = None
+        tool_calls_list = []
+        prev_index = 0
+        prev_id = None
+        curr_id = None
+        curr_index = 0
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -2141,6 +2203,11 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
                 if tool_calls and tool_calls[0].function is not None:
                     if tool_calls[0].id:
                         id = tool_calls[0].id
+                        curr_id = id
+                        if prev_id is None:
+                            prev_id = curr_id
+                    if tool_calls[0].index:
+                        curr_index = tool_calls[0].index
                     if tool_calls[0].function.arguments:
                         # Now, tool_calls is expected to be a dictionary
                         arguments = tool_calls[0].function.arguments
@@ -2149,10 +2216,17 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
                         name = tool_calls[0].function.name
                     if tool_calls[0].type:
                         type = tool_calls[0].type
+            if curr_index != prev_index: # new tool call
+                combined_arguments = "".join(argument_list)
+                tool_calls_list.append({"id": prev_id, "index": prev_index, "function": {"arguments": combined_arguments, "name": name}, "type": type})
+                argument_list = [] # reset
+                prev_index = curr_index
+                prev_id = curr_id
 
         combined_arguments = "".join(argument_list)
+        tool_calls_list.append({"id": id, "function": {"arguments": combined_arguments, "name": name}, "type": type})
         response["choices"][0]["message"]["content"] = None
-        response["choices"][0]["message"]["tool_calls"] = [{"id": id, "function": {"arguments": combined_arguments, "name": name}, "type": type}]
+        response["choices"][0]["message"]["tool_calls"] = tool_calls_list
     elif "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
@@ -2199,8 +2273,11 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     elif len(combined_arguments) > 0:
         completion_output = combined_arguments
     # # Update usage information if needed
-    if messages:
+    try:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+    except: # don't allow this failing to block a complete streaming response from being returned
+        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
+        response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(model=model, text=completion_output)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())

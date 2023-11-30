@@ -7,10 +7,6 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import asyncio
-import concurrent
-import inspect
-import logging
 import os
 import random
 import sys
@@ -30,7 +26,6 @@ import litellm
 from litellm.caching import RedisCache, InMemoryCache, DualCache
 import logging, asyncio
 import inspect, concurrent
-from openai import AsyncOpenAI
 from collections import defaultdict
 
 class Router:
@@ -115,14 +110,13 @@ class Router:
 
         # default litellm args
         self.default_litellm_params = default_litellm_params
-        self.default_litellm_params["timeout"] = timeout
-        self.default_litellm_params["max_retries"] = 0
+        self.default_litellm_params.setdefault("timeout", timeout)
+        self.default_litellm_params.setdefault("max_retries", 0)
 
 
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
             self._start_health_check_thread()
-
         ### CACHING ###
         redis_cache = None
         if redis_host is not None and redis_port is not None and redis_password is not None:
@@ -152,6 +146,7 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
+        self.print_verbose(f"Intialized router with Routing strategy: {self.routing_strategy}\n")
 
 
     ### COMPLETION + EMBEDDING FUNCTIONS
@@ -221,7 +216,8 @@ class Router:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=timeout)
+            # response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=timeout)
+            response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
         except Exception as e:
@@ -652,13 +648,13 @@ class Router:
             else:
                 cached_value = cached_value + [deployment]
                 # save updated value
-                self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=60)
+                self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1)
         except:
             cached_value = [deployment]
             # save updated value
-            self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=60)
+            self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1)
         else:
-            self.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=60)
+            self.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=1)
 
     def _get_cooldown_deployments(self):
         """
@@ -847,6 +843,7 @@ class Router:
                 or custom_llm_provider == "openai"
                 or custom_llm_provider == "azure"
                 or "ft:gpt-3.5-turbo" in model_name
+                or model_name in litellm.open_ai_embedding_models
             ):
                 # glorified / complicated reading of configs
                 # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
@@ -891,8 +888,18 @@ class Router:
             ############ End of initializing Clients for OpenAI/Azure ###################
             model_id = ""
             for key in model["litellm_params"]:
-                model_id+= str(model["litellm_params"][key])
+                if key != "api_key":
+                    model_id+= str(model["litellm_params"][key])
             model["litellm_params"]["model"] += "-ModelID-" + model_id
+
+            ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
+            # for get_available_deployment, we use the litellm_param["rpm"]
+            # in this snippet we also set rpm to be a litellm_param
+            if model["litellm_params"].get("rpm") is None and model.get("rpm") is not None:
+                model["litellm_params"]["rpm"] = model.get("rpm")
+            if model["litellm_params"].get("tpm") is None and model.get("tpm") is not None:
+                model["litellm_params"]["tpm"] = model.get("tpm")
+
         self.model_names = [m["model_name"] for m in model_list]
 
     def get_model_names(self):
@@ -943,6 +950,37 @@ class Router:
             else:
                 raise ValueError("No models available.")
         elif self.routing_strategy == "simple-shuffle":
+            # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
+            if rpm is not None:
+                # use weight-random pick if rpms provided
+                rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
+                self.print_verbose(f"\nrpms {rpms}")
+                total_rpm = sum(rpms)
+                weights = [rpm / total_rpm for rpm in rpms]
+                self.print_verbose(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(rpms)), weights=weights)[0]
+                self.print_verbose(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                return deployment or deployment[0]
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
+            if tpm is not None:
+                # use weight-random pick if rpms provided
+                tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
+                self.print_verbose(f"\ntpms {tpms}")
+                total_tpm = sum(tpms)
+                weights = [tpm / total_tpm for tpm in tpms]
+                self.print_verbose(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(tpms)), weights=weights)[0]
+                self.print_verbose(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                return deployment or deployment[0]
+
+            ############## No RPM/TPM passed, we do a random pick #################
             item = random.choice(healthy_deployments)
             return item or item[0]
         elif self.routing_strategy == "latency-based-routing":
