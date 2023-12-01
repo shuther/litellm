@@ -1,21 +1,20 @@
 # Base image
-FROM python:3.9-slim
+ARG LITELLM_BASE_IMAGE=python:3.9-slim
 
-# Copy the project files to the working directory
-COPY litellm /app/litellm
+# allow users to specify, else use python 3.9-slim
+FROM $LITELLM_BASE_IMAGE
 
-# Set the working directory
-WORKDIR /app/litellm
+# Set the working directory to /app
+WORKDIR /app
 
-# Install the project dependencies
-COPY requirements.txt /app/litellm/requirements.txt
-RUN pip install -r requirements.txt
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-WORKDIR /app/litellm/proxy
-
-COPY hosted_config.yaml /app/hosted_config.yaml
+# Install any needed packages specified in requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir=wheels -r requirements.txt
+RUN pip install --no-cache-dir --find-links=wheels -r requirements.txt
 
 EXPOSE 4000/tcp
 
-# Set the command to run when the container starts
-CMD python3 proxy_cli.py --config /app/hosted_config.yaml --port 4000
+# Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
+ENTRYPOINT litellm --config /app/proxy_server_config.yaml --port 4000

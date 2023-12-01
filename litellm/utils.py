@@ -63,8 +63,13 @@ from .exceptions import (
 )
 from typing import cast, List, Dict, Union, Optional, Literal
 from .caching import Cache
-
+from concurrent.futures import ThreadPoolExecutor
 ####### ENVIRONMENT VARIABLES ####################
+# Adjust to your specific application needs / system capabilities.
+MAX_THREADS = 100 
+
+# Create a ThreadPoolExecutor 
+executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 dotenv.load_dotenv()  # Loading env variables using dotenv
 sentry_sdk_instance = None
 capture_exception = None
@@ -1564,7 +1569,7 @@ def decode(model: str, tokens: List[int]):
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
-def openai_token_counter(messages, model="gpt-3.5-turbo-0613"):
+def openai_token_counter(messages: Optional[list]=None, model="gpt-3.5-turbo-0613", text: Optional[str]= None):
     """
     Return the number of tokens used by a list of messages.
 
@@ -1575,36 +1580,27 @@ def openai_token_counter(messages, model="gpt-3.5-turbo-0613"):
     except KeyError:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
-    if model in {
-        "gpt-3.5-turbo-0613",
-        "gpt-3.5-turbo-16k-0613",
-        "gpt-4-0314",
-        "gpt-4-32k-0314",
-        "gpt-4-0613",
-        "gpt-4-32k-0613",
-        }:
-        tokens_per_message = 3
-        tokens_per_name = 1
-    elif model == "gpt-3.5-turbo-0301":
+    if model == "gpt-3.5-turbo-0301":
         tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
         tokens_per_name = -1  # if there's a name, the role is omitted
-    elif "gpt-3.5-turbo" in model:
-        print_verbose("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0613.")
-        return openai_token_counter(messages, model="gpt-3.5-turbo-0613")
-    elif "gpt-4" in model:
-        print_verbose("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
-        return openai_token_counter(messages, model="gpt-4-0613")
+    elif model in litellm.open_ai_chat_completion_models:
+        tokens_per_message = 3
+        tokens_per_name = 1
     else:
         raise NotImplementedError(
             f"""num_tokens_from_messages() is not implemented for model {model}. See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens."""
         )
     num_tokens = 0
-    for message in messages:
-        num_tokens += tokens_per_message
-        for key, value in message.items():
-            num_tokens += len(encoding.encode(value))
-            if key == "name":
-                num_tokens += tokens_per_name
+
+    if text: 
+        num_tokens = len(encoding.encode(text, disallowed_special=()))
+    elif messages: 
+        for message in messages:
+            num_tokens += tokens_per_message
+            for key, value in message.items():
+                num_tokens += len(encoding.encode(value, disallowed_special=()))
+                if key == "name":
+                    num_tokens += tokens_per_name
     num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
     return num_tokens
 
@@ -1624,19 +1620,26 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     if text == None:
         if messages is not None:
             print_verbose(f"token_counter messages received: {messages}")
-            text = "".join([message["content"] for message in messages])
+            text = "" 
+            for message in messages: 
+                if message.get("content", None):
+                    text += message["content"]
+                if 'tool_calls' in message:
+                    for tool_call in message['tool_calls']:
+                        if 'function' in tool_call:
+                            function_arguments = tool_call['function']['arguments']
+                            text += function_arguments
         else:
             raise ValueError("text and messages cannot both be None")
     num_tokens = 0
-
     if model is not None:
         tokenizer_json = _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer": 
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer": 
-            if model in litellm.open_ai_chat_completion_models and messages != None:
-                num_tokens = openai_token_counter(messages, model=model)
+            if model in litellm.open_ai_chat_completion_models:
+                num_tokens = openai_token_counter(text=text, model=model)
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)
                 num_tokens = len(enc)
@@ -1668,8 +1671,6 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
         "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
         "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
     }
-    if "azure/" in  model:
-        model = model.replace("azure/", "")
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -1749,7 +1750,7 @@ def completion_cost(
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         completion_tokens = 0
-        if completion_response != None:
+        if completion_response is not None:
             # get input/output tokens from completion_response
             prompt_tokens = completion_response['usage']['prompt_tokens']
             completion_tokens = completion_response['usage']['completion_tokens']
@@ -1804,7 +1805,6 @@ def register_model(model_cost: Union[str, dict]):
         if key in litellm.model_cost:
             for k,v in loaded_model_cost[key].items():
                 litellm.model_cost[key][k] = v
-        # litellm.model_cost[key] = loaded_model_cost[key]
         # add new model names to provider lists
         if value.get('litellm_provider') == 'openai':
             if key not in litellm.open_ai_chat_completion_models:
@@ -3506,7 +3506,7 @@ def _should_retry(status_code: int):
 
     return False
 
-def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None):
+def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None, min_timeout: int = 0):
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
@@ -3548,7 +3548,7 @@ def _calculate_retry_after(remaining_retries: int, max_retries: int, response_he
     # Apply some jitter, plus-or-minus half a second.
     jitter = 1 - 0.25 * random.random()
     timeout = sleep_seconds * jitter
-    return timeout if timeout >= 0 else 0
+    return timeout if timeout >= min_timeout else min_timeout
 
 # integration helper function
 def modify_integration(integration_name, integration_params):
@@ -4651,7 +4651,8 @@ def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
         "exception": str(exception),
         "custom_llm_provider": custom_llm_provider,
     }
-    threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
+    executor.submit(litellm_telemetry, data)
+    # threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
 
 def get_or_generate_uuid():
     temp_dir = os.path.join(os.path.abspath(os.sep), "tmp")
@@ -4717,7 +4718,6 @@ def litellm_telemetry(data):
     except:
         # [Non-Blocking Error]
         return
-
 
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
@@ -5300,6 +5300,7 @@ class CustomStreamWrapper:
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
+                # LOGGING
                 threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
                 return model_response
             else: 

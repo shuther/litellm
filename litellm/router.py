@@ -423,7 +423,10 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
+            if "No models available" in str(e): 
+                timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries)
+                await asyncio.sleep(timeout)
+            elif hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
                 if hasattr(original_exception.response, "headers"):
                     timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=original_exception.response.headers)
                 else:
@@ -440,15 +443,14 @@ class Router:
                     if inspect.iscoroutinefunction(response): # async errors are often returned as coroutines
                         response = await response
                     return response
-
-                except Exception as e:
+                
+                except Exception as e: 
                     if hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
                         remaining_retries = num_retries - current_attempt
                         if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=e.response.headers)
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, response_headers=e.response.headers)
                         else:
-                            timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries)
-                        timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
                         await asyncio.sleep(timeout)
                     else:
                         raise e
@@ -854,6 +856,8 @@ class Router:
                     api_key = os.getenv(api_key_env_name)
 
                 api_base = litellm_params.get("api_base")
+                base_url = litellm_params.get("base_url")
+                api_base = api_base or base_url # allow users to pass in `api_base` or `base_url` for azure
                 if api_base and api_base.startswith("os.environ/"):
                     api_base_env_name = api_base.replace("os.environ/", "")
                     api_base = os.getenv(api_base_env_name)
@@ -866,16 +870,32 @@ class Router:
                 if "azure" in model_name:
                     if api_version is None:
                         api_version = "2023-07-01-preview"
-                    model["async_client"] = openai.AsyncAzureOpenAI(
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version
-                    )
-                    model["client"] = openai.AzureOpenAI(
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version
-                    )
+                    if "gateway.ai.cloudflare.com" in api_base: 
+                        if not api_base.endswith("/"): 
+                            api_base += "/"
+                        azure_model = model_name.replace("azure/", "")
+                        api_base += f"{azure_model}"
+                        model["async_client"] = openai.AsyncAzureOpenAI(
+                            api_key=api_key,
+                            base_url=api_base,
+                            api_version=api_version
+                        )
+                        model["client"] = openai.AzureOpenAI(
+                            api_key=api_key,
+                            base_url=api_base,
+                            api_version=api_version
+                        )
+                    else:
+                        model["async_client"] = openai.AsyncAzureOpenAI(
+                            api_key=api_key,
+                            azure_endpoint=api_base,
+                            api_version=api_version
+                        )
+                        model["client"] = openai.AzureOpenAI(
+                            api_key=api_key,
+                            azure_endpoint=api_base,
+                            api_version=api_version
+                        )
                 else:
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,
