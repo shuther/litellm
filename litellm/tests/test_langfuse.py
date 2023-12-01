@@ -22,7 +22,7 @@ def test_langfuse_logging_async():
                 messages=[{"role": "user", "content":"This is a test"}],
                 max_tokens=1000,
                 temperature=0.7,
-                timeout=5
+                timeout=5,
             )
         response = asyncio.run(_test_langfuse())
         print(f"response: {response}")
@@ -35,13 +35,15 @@ def test_langfuse_logging_async():
 
 def test_langfuse_logging():
     try:
+        # litellm.set_verbose = True
         response = completion(model="claude-instant-1.2",
                               messages=[{
                                   "role": "user",
                                   "content": "Hi 👋 - i'm claude"
                               }],
                               max_tokens=10,
-                              temperature=0.2
+                              temperature=0.2,
+                              metadata={"langfuse/key": "foo"}
                               )
         print(response)
     except litellm.Timeout as e: 
@@ -49,7 +51,7 @@ def test_langfuse_logging():
     except Exception as e:
         print(e)
 
-# test_langfuse_logging()
+test_langfuse_logging()
 
 
 def test_langfuse_logging_stream():
@@ -77,6 +79,7 @@ def test_langfuse_logging_stream():
 
 def test_langfuse_logging_custom_generation_name():
     try:
+        litellm.set_verbose=True
         response = completion(model="gpt-3.5-turbo",
                               messages=[{
                                   "role": "user",
@@ -84,18 +87,19 @@ def test_langfuse_logging_custom_generation_name():
                               }],
                               max_tokens=10,
                               metadata = {
-                                "generation_name": "litellm-ishaan-gen", # set langfuse generation name
-                                # custom metadata fields
-                                "project": "litellm-proxy" 
-                              }
+                                    "langfuse/foo": "bar", 
+                                    "langsmith/fizz": "buzz", 
+                                    "prompt_hash": "asdf98u0j9131123"
+                                }
         )
         print(response)
     except litellm.Timeout as e: 
         pass
     except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
         print(e)
 
-# test_langfuse_logging_custom_generation_name()
+test_langfuse_logging_custom_generation_name()
 
 def test_langfuse_logging_function_calling():
     function1 = [

@@ -11,6 +11,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Optional, List
 import secrets, subprocess
+import warnings
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -23,6 +24,7 @@ try:
     import backoff
     import yaml
     import rq
+    import orjson
 except ImportError:
     import sys
 
@@ -36,8 +38,9 @@ except ImportError:
             "fastapi",
             "appdirs",
             "backoff",
-            "pyyaml", #TODO should it be pyyaml or yaml?
-            "rq"
+            "pyyaml", 
+            "rq",
+             "orjson"
         ]
     )
     import uvicorn
@@ -45,6 +48,11 @@ except ImportError:
     import appdirs
     import backoff
     import yaml
+    import orjson
+
+    warnings.warn(
+        "Installed runtime dependencies for proxy server. Specify these dependencies explicitly with `pip install litellm[proxy]`"
+    )
 
 import random
 
@@ -94,7 +102,7 @@ litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.routing import APIRouter
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 import json
@@ -248,7 +256,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
-            raise Exception(f"Path to config does not exist, 'os.path.exists({config_file_path})' returned False")
+            raise Exception(f"Path to config does not exist, Current working directory: {os.getcwd()}, 'os.path.exists({config_file_path})' returned False")
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
 
@@ -582,6 +590,11 @@ async def completion(request: Request, model: Optional[str] = None):
         if user_model:
             data["model"] = user_model
         data["call_type"] = "text_completion"
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+
         return litellm_completion(
             **data
         )
@@ -618,10 +631,30 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             or model # for azure deployments
             or data["model"] # default passed in http request
         )
-        data["call_type"] = "chat_completion"
-        return litellm_completion(
-            **data
-        )
+
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+
+        global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+        # override with user settings, these are params passed via cli
+        if user_temperature: 
+            data["temperature"] = user_temperature
+        if user_request_timeout:
+            data["request_timeout"] = user_request_timeout
+        if user_max_tokens: 
+            data["max_tokens"] = user_max_tokens
+        if user_api_base: 
+            data["api_base"] = user_api_base
+        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
+        if llm_router is not None and data["model"] in router_model_names: # model in router model list 
+                response = await llm_router.acompletion(**data)
+        else: 
+            response = await litellm.acompletion(**data)
+        if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
+            return StreamingResponse(async_data_generator(response), media_type='text/event-stream')
+        return response
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         if llm_router is not None and data["model"] in router_model_names:
@@ -649,12 +682,15 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             detail=error_msg
         )
 
-@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)])
-@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)])
-async def embeddings(request: Request):
-    try:
-        data = await request.json()
-        print_verbose(f"data: {data}")
+@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
+@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
+async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth)): 
+    try: 
+
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        body = await request.body()
+        data = orjson.loads(body)
+
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
@@ -662,7 +698,7 @@ async def embeddings(request: Request):
         )
         if user_model:
             data["model"] = user_model
-
+        data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
         ## ROUTE TO CORRECT ENDPOINT ##
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list
@@ -675,6 +711,8 @@ async def embeddings(request: Request):
         raise e
     except Exception as e:
         pass
+
+#### KEY MANAGEMENT #### 
 
 @router.post("/key/generate", dependencies=[Depends(user_api_key_auth)])
 async def generate_key_fn(request: Request):
@@ -720,7 +758,7 @@ async def delete_key_fn(request: Request):
 async def test_endpoint(request: Request):
     return {"route": request.url.path}
 
-#### EXPERIMENTAL QUEUING ####
+#### EXPERIMENTAL QUEUING #### 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
 async def async_queue_request(request: Request):
     global celery_fn, llm_model_list
@@ -758,6 +796,7 @@ async def async_queue_response(request: Request, task_id: str):
 async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser("~/.ollama/logs/server.log")
     return FileResponse(filepath)
+
 
 #### BASIC ENDPOINTS #### 
 

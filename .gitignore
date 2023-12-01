@@ -21,3 +21,4 @@ litellm/proxy/_secret_config.yaml
 legacy/
 .aws-sam/
 litellm/tests/aiologs.log
+litellm/tests/exception_data.txt

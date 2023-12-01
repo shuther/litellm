@@ -16,7 +16,7 @@ LiteLLM Server manages:
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
-$ pip install litellm
+$ pip install litellm[proxy]
 ```
 
 ```shell
@@ -261,6 +261,40 @@ print(response)
 
 ```
 </TabItem>
+<TabItem value="librechat" label="LibreChat">
+
+### Start the LiteLLM proxy
+```shell
+litellm --model gpt-3.5-turbo
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+#### 1. Clone the repo
+
+```shell
+git clone https://github.com/danny-avila/LibreChat.git
+```
+
+
+#### 2. Modify Librechat's `docker-compose.yml`
+LiteLLM Proxy is running on port `8000`, set `8000` as the proxy below
+```yaml
+OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+```
+
+#### 3. Save fake OpenAI key in Librechat's `.env` 
+
+Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
+```env
+OPENAI_API_KEY=sk-1234
+```
+
+#### 4. Run LibreChat: 
+```shell
+docker compose up
+```
+</TabItem>
 
 <TabItem value="continue-dev" label="ContinueDev">
 
@@ -357,30 +391,6 @@ Don't answer the question yet.
 
 result = experts(query='How can I be more productive?')
 print(result)
-```
-</TabItem>
-<TabItem value="librechat" label="LibreChat">
-
-#### 1. Clone the repo
-
-```shell
-git clone https://github.com/danny-avila/LibreChat.git
-```
-
-
-#### 2. Modify `docker-compose.yml`
-```yaml
-OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
-```
-
-#### 3. Save fake OpenAI key in `.env`
-```env
-OPENAI_API_KEY=sk-1234
-```
-
-#### 4. Run LibreChat: 
-```shell
-docker compose up
 ```
 </TabItem>
 </Tabs>
@@ -1015,6 +1025,12 @@ litellm --test
 Expected output on Langfuse
 
 <Image img={require('../img/langfuse_small.png')} />
+
+## Deploying LiteLLM Proxy
+
+### Deploy on Render https://render.com/
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 ## LiteLLM Proxy Performance
 

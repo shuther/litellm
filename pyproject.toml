@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.8.0"
+version = "1.9.4"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
@@ -63,6 +63,20 @@ transformers = "*"
 #seems a big one, depends on nvidia
 #torch = "~2.1.1"
 
+uvicorn = {version = "^0.24.0.post1", optional = true}
+fastapi = {version = "^0.104.1", optional = true}
+backoff = {version = "*", optional = true}
+rq = {version = "*", optional = true}
+
+[tool.poetry.extras]
+proxy = [
+    "uvicorn",
+    "fastapi",
+    "backoff",
+    "rq",
+    "orjson",
+]
+
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
 
@@ -77,11 +91,11 @@ flask = "*"
 flask-cors = "*"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.8.0"
+version = "1.9.4"
 version_files = [
     "pyproject.toml:^version"
 ]
