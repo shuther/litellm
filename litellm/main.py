@@ -35,9 +35,10 @@ from litellm.utils import (
     completion_with_fallbacks,
     get_llm_provider,
     get_api_key,
-    mock_completion_streaming_obj,
-    convert_to_model_response_object,
-    token_counter
+    mock_completion_streaming_obj, 
+    convert_to_model_response_object, 
+    token_counter, 
+    Usage
 )
 from .llms import (
     anthropic,
@@ -269,7 +270,7 @@ def completion(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
     logit_bias: Optional[dict] = None,
-    user: str = "",
+    user: Optional[str] = None,
     # openai v1.0+ new params
     response_format: Optional[dict] = None,
     seed: Optional[int] = None,
@@ -1296,11 +1297,7 @@ def completion(
             model_response["model"] = "ollama/" + model
             prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
+            model_response["usage"] = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
             response = model_response
         elif (
             custom_llm_provider == "baseten"
@@ -1487,7 +1484,7 @@ def batch_completion(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
     logit_bias: Optional[dict] = None,
-    user: str = "",
+    user: Optional[str] = None,
     deployment_id = None,
     request_timeout: Optional[int] = None,
     # Optional liteLLM function params
@@ -1747,6 +1744,7 @@ def embedding(
     api_key: Optional[str] = None,
     api_type: Optional[str] = None,
     caching: bool=False,
+    user: Optional[str]=None,
     custom_llm_provider=None,
     litellm_call_id=None, 
     litellm_logging_obj=None,

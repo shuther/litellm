@@ -1,19 +1,17 @@
 ### INIT VARIABLES ###
-import os
-import threading
-from typing import Callable, Optional, Dict, Union
-
-import httpx
-import json5
-import requests
+import threading, requests
+from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 
-input_callback: list[Union[str, Callable]] = []
-success_callback: list[Union[str, Callable]] = []
-failure_callback: list[Union[str, Callable]] = []
-callbacks: list[Callable] = []
-pre_call_rules: list[Callable] = []
-post_call_rules: list[Callable] = []
+import json5
+
+input_callback: List[Union[str, Callable]] = []
+success_callback: List[Union[str, Callable]] = []
+failure_callback: List[Union[str, Callable]] = []
+callbacks: List[Callable] = []
+_async_success_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
+pre_call_rules: List[Callable] = []
+post_call_rules: List[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -64,6 +62,8 @@ num_retries: Optional[int] = None
 fallbacks: Optional[list] = None
 context_window_fallbacks: Optional[list] = None
 allowed_fails: int = 0
+####### SECRET MANAGERS #####################
+secret_manager_client: Optional[Any] = None # list of instantiated key management clients - e.g. azure kv, infisical, etc. 
 #############################################
 
 
@@ -111,8 +111,6 @@ headers = None
 api_version = None
 organization = None
 config_path = None
-####### Secret Manager #####################
-secret_manager_client = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: list = []
 open_ai_text_completion_models: list = []
@@ -270,7 +268,8 @@ from .utils import (
     encode,
     decode,
     _calculate_retry_after,
-    _should_retry
+    _should_retry,
+    get_secret
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
