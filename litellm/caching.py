@@ -79,10 +79,10 @@ class InMemoryCache(BaseCache):
 
 
 class RedisCache(BaseCache):
-    def __init__(self, host, port, password):
+    def __init__(self, host, port, password, **kwargs):
         import redis
         # if users don't provider one, use the default litellm cache
-        self.redis_client = redis.Redis(host=host, port=port, password=password)
+        self.redis_client = redis.Redis(host=host, port=port, password=password, **kwargs)
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
@@ -178,7 +178,8 @@ class Cache:
             type="local",
             host=None,
             port=None,
-            password=None
+            password=None,
+            **kwargs
     ):
         """
         Initializes the cache based on the given type.
@@ -188,6 +189,7 @@ class Cache:
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
+            **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
             ValueError: If an invalid cache type is provided.
@@ -196,7 +198,7 @@ class Cache:
             None
         """
         if type == "redis":
-            self.cache = RedisCache(host, port, password)
+            self.cache = RedisCache(host, port, password, **kwargs)
         if type == "local":
             self.cache = InMemoryCache()
         if "cache" not in litellm.input_callback:

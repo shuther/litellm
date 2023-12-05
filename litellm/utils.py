@@ -552,7 +552,8 @@ class Logging:
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
             "start_time": self.start_time,
-            "stream": self.stream
+            "stream": self.stream,
+            **self.optional_params
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -748,13 +749,9 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
             pass
-
     
-    def success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
-        print_verbose(
-                f"Logging Details LiteLLM-Success Call"
-            )
-        try:
+    def _success_handler_helper_fn(self, result=None, start_time=None, end_time=None): 
+        try: 
             if start_time is None:
                 start_time = self.start_time
             if end_time is None:
@@ -782,6 +779,18 @@ class Logging:
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(model=self.model, prompt="", completion=result["content"], total_time=float_diff)
+
+            return start_time, end_time, result, complete_streaming_response
+        except: 
+            pass
+
+    def success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
+        print_verbose(
+                f"Logging Details LiteLLM-Success Call"
+            )
+        try:
+            start_time, end_time, result, complete_streaming_response = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
+            print_verbose(f"success callbacks: {litellm.success_callback}")
 
             for callback in litellm.success_callback:
                 try:
@@ -975,6 +984,29 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
             )
             pass
+
+    async def async_success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
+        """
+        Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
+        """
+        start_time, end_time, result, complete_streaming_response = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
+        print_verbose(f"success callbacks: {litellm.success_callback}")
+
+        for callback in litellm._async_success_callback:
+            try: 
+                if callable(callback): # custom logger functions
+                    await customLogger.async_log_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                        callback_func=callback
+                    )
+            except: 
+                print_verbose(
+                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
+                )
 
     def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
         print_verbose(
@@ -1192,6 +1224,17 @@ def client(original_function):
                     callback_list=callback_list,
                     function_id=function_id
                 )
+            ## ASYNC CALLBACKS
+            if len(litellm.success_callback) > 0: 
+                removed_async_items = []
+                for index, callback in enumerate(litellm.success_callback): 
+                    if inspect.iscoroutinefunction(callback): 
+                        litellm._async_success_callback.append(callback)
+                        removed_async_items.append(index)
+
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.success_callback.pop(index)
             if add_breadcrumb:
                 add_breadcrumb(
                     category="litellm.llm_call",
@@ -1380,7 +1423,6 @@ def client(original_function):
         start_time = datetime.datetime.now()
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
-
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
@@ -1433,8 +1475,8 @@ def client(original_function):
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
-
-            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
+            # LOG SUCCESS - handle streaming success logging in the _next_ object
+            asyncio.create_task(logging_obj.async_success_handler(result, start_time, end_time))
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
             if isinstance(result, ModelResponse):
@@ -1472,7 +1514,6 @@ def client(original_function):
                 logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
 
-    # Use httpx to determine if the original function is a coroutine
     is_coroutine = inspect.iscoroutinefunction(original_function)
 
     # Return the appropriate wrapper based on the original function type
@@ -1664,7 +1705,6 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
-
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     azure_llms = {
         "gpt-35-turbo": "azure/gpt-3.5-turbo",
@@ -1696,6 +1736,7 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
         # calculate average input cost, azure/gpt-deployments can potentially go here if users don't specify, gpt-4, gpt-3.5-turbo. LLMs litellm knows
         input_cost_sum = 0
@@ -1896,7 +1937,7 @@ def get_optional_params(  # use the openai defaults
     presence_penalty=None,
     frequency_penalty=0,
     logit_bias=None,
-    user="",
+    user=None,
     model=None,
     custom_llm_provider="",
     response_format=None,
@@ -1923,7 +1964,7 @@ def get_optional_params(  # use the openai defaults
         "presence_penalty":None,
         "frequency_penalty":None,
         "logit_bias": None,
-        "user":"",
+        "user":None,
         "model":None,
         "custom_llm_provider":"",
         "response_format": None,
@@ -2428,8 +2469,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             return model, custom_llm_provider, dynamic_api_key, api_base
         
         if api_key and api_key.startswith("os.environ/"): 
-            api_key_env_name = api_key.replace("os.environ/", "")
-            dynamic_api_key = os.getenv(api_key_env_name)
+            dynamic_api_key = get_secret(api_key)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -2437,15 +2477,15 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = "https://api.perplexity.ai"
-                dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
             elif custom_llm_provider == "anyscale": 
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.endpoints.anyscale.com/v1"
-                dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                dynamic_api_key = get_secret("ANYSCALE_API_KEY")
             elif custom_llm_provider == "deepinfra": 
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
-                dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
+                dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint
@@ -2454,13 +2494,13 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 if endpoint in api_base:
                     if endpoint == "api.perplexity.ai":
                         custom_llm_provider = "perplexity"
-                        dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                        dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
-                        dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                        dynamic_api_key = get_secret("ANYSCALE_API_KEY")
                     elif endpoint == "api.deepinfra.com/v1/openai":
                         custom_llm_provider = "deepinfra"
-                        dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
+                        dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -2711,6 +2751,13 @@ def get_model_info(model: str):
         except requests.exceptions.RequestException as e:
             return None
     try:
+        azure_llms = {
+            "gpt-35-turbo": "azure/gpt-3.5-turbo",
+            "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
+            "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
+        }
+        if model in azure_llms: 
+            model = azure_llms[model]
         if model in litellm.model_cost:
             return litellm.model_cost[model]
         model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
@@ -4722,14 +4769,20 @@ def litellm_telemetry(data):
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def get_secret(secret_name):
-    if litellm.secret_manager_client != None:
+def get_secret(secret_name: str):
+    if secret_name.startswith("os.environ/"): 
+        secret_name = secret_name.replace("os.environ/", "")
+    if litellm.secret_manager_client is not None:
         # TODO: check which secret manager is being used
         # currently only supports Infisical
         try:
-            secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
-        except:
-            secret = None
+            client = litellm.secret_manager_client
+            if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
+                secret = retrieved_secret = client.get_secret(secret_name).value
+            else: # assume the default is infisicial client
+                secret = client.get_secret(secret_name).secret_value
+        except: # check if it's in os.environ
+            secret = os.environ.get(secret_name)
         return secret
     else:
         return os.environ.get(secret_name)
@@ -5121,7 +5174,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         model_response.choices[0].finish_reason = None
-        response_obj = None
+        response_obj = {}
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -5228,6 +5281,7 @@ class CustomStreamWrapper:
                 time.sleep(0.05)
             elif self.custom_llm_provider == "palm":
                 # fake streaming
+                response_obj = {}
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
                         raise StopIteration
@@ -5262,14 +5316,32 @@ class CustomStreamWrapper:
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason) # filter out bos/eos tokens from openai-compatible hf endpoints
                 print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
-                if hold is False:
-                    completion_obj["content"] = model_response_str  
-                    if self.sent_first_chunk == False:
-                        completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
-                    model_response.choices[0].delta = Delta(**completion_obj)
+                if hold is False: 
+                    ## check if openai/azure chunk 
+                    original_chunk = response_obj.get("original_chunk", None)
+                    if original_chunk: 
+                        model_response.id = original_chunk.id
+                        if len(original_chunk.choices) > 0:
+                            try:
+                                delta = dict(original_chunk.choices[0].delta)
+                                model_response.choices[0].delta = Delta(**delta)
+                            except Exception as e:
+                                model_response.choices[0].delta = Delta()
+                        else: 
+                            return 
+                        model_response.system_fingerprint = original_chunk.system_fingerprint
+                        if self.sent_first_chunk == False:
+                            model_response.choices[0].delta["role"] = "assistant"
+                            self.sent_first_chunk = True
+                    else: 
+                        ## else 
+                        completion_obj["content"] = model_response_str  
+                        if self.sent_first_chunk == False:
+                            completion_obj["role"] = "assistant"
+                            self.sent_first_chunk = True
+                        model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     print_verbose(f"model_response: {model_response}")
@@ -5347,6 +5419,8 @@ class CustomStreamWrapper:
                     processed_chunk = self.chunk_creator(chunk=chunk)
                     if processed_chunk is None: 
                         continue
+                    ## LOGGING
+                    asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                     return processed_chunk
                 raise StopAsyncIteration
             else: # temporary patch for non-aiohttp async calls

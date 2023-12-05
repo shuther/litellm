@@ -7,6 +7,11 @@ FROM $LITELLM_BASE_IMAGE
 # Set the working directory to /app
 WORKDIR /app
 
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y gcc python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the current directory contents into the container at /app
 COPY . /app
 
@@ -17,4 +22,9 @@ RUN pip install --no-cache-dir --find-links=wheels -r requirements.txt
 EXPOSE 4000/tcp
 
 # Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
-ENTRYPOINT litellm --config /app/proxy_server_config.yaml --port 4000
+
+# Start the litellm proxy with default options
+CMD ["--port", "4000"]
+
+# Allow users to override the CMD when running the container, allows users to pass litellm args 
+ENTRYPOINT ["litellm"]

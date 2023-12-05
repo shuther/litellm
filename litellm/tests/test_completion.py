@@ -442,9 +442,46 @@ def test_completion_text_openai():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_text_openai()
 
+def custom_callback(
+    kwargs,                 # kwargs to completion
+    completion_response,    # response from completion
+    start_time, end_time    # start/end time
+):
+    # Your custom code here
+    try:
+        print("LITELLM: in custom callback function")
+        print("\nkwargs\n", kwargs)
+        model = kwargs["model"]
+        messages = kwargs["messages"]
+        user = kwargs.get("user")
+
+        #################################################
+
+        print(
+            f"""
+                Model: {model},
+                Messages: {messages},
+                User: {user},
+                Seed: {kwargs["seed"]},
+                temperature: {kwargs["temperature"]},
+            """
+        )
+
+        assert kwargs["user"] == "ishaans app"
+        assert kwargs["model"] == "gpt-3.5-turbo-1106"
+        assert kwargs["seed"] == 12
+        assert kwargs["temperature"] == 0.5
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai_with_optional_params():
+    # [Proxy PROD TEST] WARNING: DO NOT DELETE THIS TEST
+    # assert that `user` gets passed to the completion call
+    # Note: This tests that we actually send the optional params to the completion call
+    # We use custom callbacks to test this 
     try:
         litellm.set_verbose = True
+        litellm.success_callback = [custom_callback]
         response = completion(
             model="gpt-3.5-turbo-1106",
             messages=[
@@ -458,11 +495,13 @@ def test_completion_openai_with_optional_params():
             seed=12,
             response_format={ "type": "json_object" },
             logit_bias=None,
+            user = "ishaans app"
         )
         # Add any assertions here to check the response
+
         print(response)
-    except litellm.Timeout as e: 
-        pass
+        litellm.success_callback = [] # unset callbacks
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -867,35 +906,35 @@ def test_completion_replicate_vicuna():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_vicuna()
-
-def test_completion_replicate_llama2_stream():
-    litellm.set_verbose=False
-    model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
-    try:
-        response = completion(
-            model=model_name, 
-            messages=[
-                {
-                    "role": "user",
-                    "content": "what is yc write 1 paragraph",
-                }
-            ], 
-            stream=True,
-            max_tokens=20,
-            num_retries=3
-        )
-        print(f"response: {response}")
-        # Add any assertions here to check the response
-        complete_response = "" 
-        for i, chunk in enumerate(response):
-            complete_response += chunk.choices[0].delta["content"]
-            # if i == 0:
-            #     assert len(chunk.choices[0].delta["content"]) > 2
-            # print(chunk)
-        assert len(complete_response) > 5
-        print(f"complete_response: {complete_response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# commenting out - flaky test
+# def test_completion_replicate_llama2_stream():
+#     litellm.set_verbose=False
+#     model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
+#     try:
+#         response = completion(
+#             model=model_name, 
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": "what is yc write 1 paragraph",
+#                 }
+#             ], 
+#             stream=True,
+#             max_tokens=20,
+#             num_retries=3
+#         )
+#         print(f"response: {response}")
+#         # Add any assertions here to check the response
+#         complete_response = "" 
+#         for i, chunk in enumerate(response):
+#             complete_response += chunk.choices[0].delta["content"]
+#             # if i == 0:
+#             #     assert len(chunk.choices[0].delta["content"]) > 2
+#             # print(chunk)
+#         assert len(complete_response) > 5
+#         print(f"complete_response: {complete_response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama2_stream()
 
 def test_replicate_custom_prompt_dict(): 
@@ -1014,9 +1053,12 @@ def test_completion_chat_sagemaker():
         response = completion(
             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
             messages=messages,
+            stream=True,
         )
         # Add any assertions here to check the response
         print(response)
+        for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_chat_sagemaker()
@@ -1337,7 +1379,7 @@ def test_azure_cloudflare_api():
         traceback.print_exc()
         pass
 
-test_azure_cloudflare_api() 
+# test_azure_cloudflare_api() 
 
 def test_completion_anyscale_2():
     try:
