@@ -228,16 +228,17 @@ tests-no-zope = ["cloudpickle", "hypothesis", "mypy (>=1.1.1)", "pympler", "pyte
 
 [[package]]
 name = "autoevals"
-version = "0.0.31"
+version = "0.0.40"
 description = "Universal library for evaluating AI models"
 optional = false
-python-versions = ">=3.9.0"
+python-versions = ">=3.8.0"
 files = [
-    {file = "autoevals-0.0.31-py3-none-any.whl", hash = "sha256:03964e776fb7fe751045ae5144dc244a75d268d53329eea318235f03f8378906"},
-    {file = "autoevals-0.0.31.tar.gz", hash = "sha256:e41dd4a12dfa49a028990c2c9538188b0a0d8006d4b06a8921a23d3108a047fd"},
+    {file = "autoevals-0.0.40-py3-none-any.whl", hash = "sha256:85ca446e57b825c90689d78b45a521ae497db65edd5a382f9899ec77643a7a18"},
+    {file = "autoevals-0.0.40.tar.gz", hash = "sha256:0a269a4a32e4ea47d7dfbedaf4506130e7541063044ea4e41e27b8ed0333774f"},
 ]
 
 [package.dependencies]
+braintrust-core = ">=0.0.6"
 chevron = "*"
 levenshtein = "*"
 pyyaml = "*"
@@ -376,6 +377,17 @@ urllib3 = {version = ">=1.25.4,<2.1", markers = "python_version >= \"3.10\""}
 
 [package.extras]
 crt = ["awscrt (==0.19.12)"]
+
+[[package]]
+name = "braintrust-core"
+version = "0.0.7"
+description = "Shared core dependencies for Braintrust packages"
+optional = false
+python-versions = ">=3.8.0"
+files = [
+    {file = "braintrust_core-0.0.7-py3-none-any.whl", hash = "sha256:a006fc7606b51af8dd1da626cd8e0d9467042bbfc685e0bca00dcf13f34dcfb5"},
+    {file = "braintrust_core-0.0.7.tar.gz", hash = "sha256:9588dfc38078a2707b7a8abf639d7e108526241e89882acfbbf8632c13438236"},
+]
 
 [[package]]
 name = "cachetools"
@@ -2632,6 +2644,21 @@ socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
 [[package]]
+name = "rq"
+version = "1.15.1"
+description = "RQ is a simple, lightweight, library for creating background jobs, and processing them."
+optional = true
+python-versions = ">=3.6"
+files = [
+    {file = "rq-1.15.1-py2.py3-none-any.whl", hash = "sha256:6e243d8d9c4af4686ded4b01b25ea1ff4bac4fc260b02638fbe9c8c17b004bd1"},
+    {file = "rq-1.15.1.tar.gz", hash = "sha256:1f49f4ac1a084044bb8e95b3f305c0bf17e55618b08c18e0b60c080f12d6f008"},
+]
+
+[package.dependencies]
+click = ">=5.0.0"
+redis = ">=4.0.0"
+
+[[package]]
 name = "s3transfer"
 version = "0.7.0"
 description = "An Amazon S3 Transfer Manager"
@@ -3892,7 +3919,12 @@ files = [
 docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (<7.2.5)", "sphinx (>=3.5)", "sphinx-lint"]
 testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-ignore-flaky", "pytest-mypy (>=0.9.1)", "pytest-ruff"]
 
+[extras]
+extra-proxy = []
+proxy = []
+proxy-otel = []
+
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "23ff6f0162903ce9952ec134bcad6195822299cb116b836c978f8f5b186f56a0"
+content-hash = "76569bd257c51d3254525e9da8ad9402184d87f746e1771cb8e02da51ea19297"
