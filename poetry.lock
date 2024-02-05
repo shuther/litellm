@@ -228,16 +228,17 @@ tests-no-zope = ["cloudpickle", "hypothesis", "mypy (>=1.1.1)", "pympler", "pyte
 
 [[package]]
 name = "autoevals"
-version = "0.0.31"
+version = "0.0.46"
 description = "Universal library for evaluating AI models"
 optional = false
-python-versions = ">=3.9.0"
+python-versions = ">=3.8.0"
 files = [
-    {file = "autoevals-0.0.31-py3-none-any.whl", hash = "sha256:03964e776fb7fe751045ae5144dc244a75d268d53329eea318235f03f8378906"},
-    {file = "autoevals-0.0.31.tar.gz", hash = "sha256:e41dd4a12dfa49a028990c2c9538188b0a0d8006d4b06a8921a23d3108a047fd"},
+    {file = "autoevals-0.0.46-py3-none-any.whl", hash = "sha256:1981c4592c9e35b19632d88d90933b43a7ad932a73da436b6bfa7b3eb4ac23c8"},
+    {file = "autoevals-0.0.46.tar.gz", hash = "sha256:fabe809d4d554c836f53df2cdd1bd22268ab516f53d408f816e05d708cb37bfb"},
 ]
 
 [package.dependencies]
+braintrust-core = ">=0.0.14"
 chevron = "*"
 levenshtein = "*"
 pyyaml = "*"
@@ -376,6 +377,17 @@ urllib3 = {version = ">=1.25.4,<2.1", markers = "python_version >= \"3.10\""}
 
 [package.extras]
 crt = ["awscrt (==0.19.12)"]
+
+[[package]]
+name = "braintrust-core"
+version = "0.0.14"
+description = "Shared core dependencies for Braintrust packages"
+optional = false
+python-versions = ">=3.8.0"
+files = [
+    {file = "braintrust_core-0.0.14-py3-none-any.whl", hash = "sha256:5d835378403fb13fb8ead5402dc8ef51950eea62ff5b829a93bb337367b87b6e"},
+    {file = "braintrust_core-0.0.14.tar.gz", hash = "sha256:5ef7ace092777c9d1bd895e8bacfde40511a74ba9276ebf336ab222392ae45f6"},
+]
 
 [[package]]
 name = "cachetools"
@@ -2359,6 +2371,7 @@ files = [
     {file = "PyYAML-6.0.1-cp311-cp311-win_amd64.whl", hash = "sha256:bf07ee2fef7014951eeb99f56f39c9bb4af143d8aa3c21b1677805985307da34"},
     {file = "PyYAML-6.0.1-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:855fb52b0dc35af121542a76b9a84f8d1cd886ea97c84703eaa6d88e37a2ad28"},
     {file = "PyYAML-6.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:40df9b996c2b73138957fe23a16a4f0ba614f4c0efce1e9406a184b6d07fa3a9"},
+    {file = "PyYAML-6.0.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a08c6f0fe150303c1c6b71ebcd7213c2858041a7e01975da3a99aed1e7a378ef"},
     {file = "PyYAML-6.0.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6c22bec3fbe2524cde73d7ada88f6566758a8f7227bfbf93a408a9d86bcc12a0"},
     {file = "PyYAML-6.0.1-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:8d4e9c88387b0f5c7d5f281e55304de64cf7f9c0021a3525bd3b1c542da3b0e4"},
     {file = "PyYAML-6.0.1-cp312-cp312-win32.whl", hash = "sha256:d483d2cdf104e7c9fa60c544d92981f12ad66a457afae824d146093b8c294c54"},
@@ -2630,6 +2643,21 @@ urllib3 = ">=1.21.1,<3"
 [package.extras]
 socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
+
+[[package]]
+name = "rq"
+version = "1.15.1"
+description = "RQ is a simple, lightweight, library for creating background jobs, and processing them."
+optional = true
+python-versions = ">=3.6"
+files = [
+    {file = "rq-1.15.1-py2.py3-none-any.whl", hash = "sha256:6e243d8d9c4af4686ded4b01b25ea1ff4bac4fc260b02638fbe9c8c17b004bd1"},
+    {file = "rq-1.15.1.tar.gz", hash = "sha256:1f49f4ac1a084044bb8e95b3f305c0bf17e55618b08c18e0b60c080f12d6f008"},
+]
+
+[package.dependencies]
+click = ">=5.0.0"
+redis = ">=4.0.0"
 
 [[package]]
 name = "s3transfer"
@@ -3892,7 +3920,12 @@ files = [
 docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (<7.2.5)", "sphinx (>=3.5)", "sphinx-lint"]
 testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-ignore-flaky", "pytest-mypy (>=0.9.1)", "pytest-ruff"]
 
+[extras]
+extra-proxy = []
+proxy = []
+proxy-otel = []
+
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "23ff6f0162903ce9952ec134bcad6195822299cb116b836c978f8f5b186f56a0"
+content-hash = "661b7d12cfce6869159d24073141105c37ca4f3a0b940e04da27c6f7abf1b0c7"
